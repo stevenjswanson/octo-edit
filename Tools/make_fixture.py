@@ -9,6 +9,9 @@ Produces, in Fixtures/generated/:
                         text differences a second recognizer produces
   meeting.truth.tsv     ground-truth line timings on the source clock (actual speech extents)
   tone-4k.mp4           10 s 4K clip with a 1 kHz tone burst every second (render tests)
+  sine-1080.mp4         10 s 1080p clip with a continuous 440 Hz tone (crossfade tests)
+
+Usage: make_fixture.py [sine]   (with "sine", only the quick sine clip is made)
 
 Speech comes from macOS `say`; media is assembled with ffmpeg.
 """
@@ -71,8 +74,17 @@ def ts(t):
     return f"{int(h):02d}:{int(m):02d}:{s:06.3f}"
 
 
+def make_sine():
+    run("ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30000/1001",
+        "-f", "lavfi", "-i", f"sine=f=440:r={RATE}", "-t", "10", "-c:v", "libx264", "-preset", "ultrafast",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", str(RATE), os.path.join(OUT, "sine-1080.mp4"))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
+    make_sine()
+    if sys.argv[1:] == ["sine"]:
+        return
     tmp = tempfile.mkdtemp(prefix="octofixture-")
     pieces, t = [], LEAD
     concat = os.path.join(tmp, "concat.txt")
