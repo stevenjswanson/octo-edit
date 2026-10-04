@@ -116,6 +116,30 @@ func samples(_ url: URL) async throws -> [Float] {
         }
     }
 
+    /// Two clips joined: duration is the sum, captions keep both clips' words and no
+    /// cue straddles the join; the slug avoids clip slugs.
+    @Test(.enabled(if: haveSine)) func supercutJoinsClipsInOrder() async throws {
+        let src = fixture("sine-1080.mp4")
+        var p = secondsProject(source: src.path)
+        let a = try p.makeClip(words: 1...2, name: "First")
+        let b = try p.makeClip(words: 5...6, name: "Supercut")
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let r = try await Renderer(project: p, source: src)
+        let slug = r.supercutSlug(base: "")
+        #expect(slug == "supercut-all")
+        #expect(r.supercutSlug(base: "My Talk") == "my-talk-supercut")
+        let out = try await r.renderSupercut([p.clip(a)!, p.clip(b)!], slug: slug, into: dir, options: .init())
+        let expected = p.duration(of: p.clip(a)!) + p.duration(of: p.clip(b)!)
+        #expect(abs(out.duration - expected) < 0.1, "\(out.duration) vs \(expected)")
+        let fileDuration = try await AVURLAsset(url: out.file).load(.duration).seconds
+        #expect(abs(fileDuration - out.duration) < 0.1)
+        let vtt = try String(contentsOf: dir.appendingPathComponent("supercut-all.vtt"), encoding: .utf8)
+        #expect(vtt.contains("w1 w2"))
+        #expect(vtt.contains("w5 w6"))
+        #expect(!vtt.contains("w2 w5"))
+    }
+
     @Test(.enabled(if: haveTone)) func previewIs720pH264() async throws {
         let src = fixture("tone-4k.mp4")
         var p = secondsProject(source: src.path)

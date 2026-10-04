@@ -188,3 +188,45 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(p.paragraphs.count == 2)
     }
 }
+
+@Suite struct BoundaryTests {
+    /// Three words with gaps: "one" 1.0–1.4, "two" 2.0–2.4, "three" 3.0–3.4.
+    func project() throws -> (Project, ClipID) {
+        let words = [("one", 1.0, 1.4), ("two", 2.0, 2.4), ("three", 3.0, 3.4)].enumerated().map { i, w in
+            Word(id: WordID(i), text: w.0, start: w.1, end: w.2, paragraph: ParagraphID(0))
+        }
+        var p = Project(source: "x.mp4", paragraphs: [Paragraph(id: ParagraphID(0))], words: words)
+        let id = try p.makeClip(words: 0...2)
+        try p.omit(words: 1...1, in: id)
+        return (p, id)
+    }
+
+    @Test func rolesAnchorsAndTimes() throws {
+        let (p, id) = try project()
+        let b = p.boundaries(of: p.clip(id)!)
+        #expect(b.map { p.role(of: $0) } == [.clipStart, .omissionStart, .omissionEnd, .clipEnd])
+        #expect(b.map { p.anchorWord(of: $0) } == [0, 0, 2, 2])
+        #expect(p.boundaryTime(of: b[0])! == 1.0 - p.settings.prePad)
+        #expect(p.boundaryTime(of: b[1])! == 1.4)
+        #expect(p.boundaryTime(of: b[3])! == 3.4 + p.settings.postPad)
+    }
+
+    @Test func silenceSnapFindsTheQuietMiddle() throws {
+        let (p, id) = try project()
+        // Loud everywhere except 1.6–1.8 s.
+        var rms = [Float](repeating: 0.5, count: 800)
+        for i in 320..<360 { rms[i] = 0.001 }
+        let env = Envelope(bucketsPerSecond: 200, rms: rms)
+        let out = BoundaryRef(clip: id, segment: 0, inPoint: false)   // after "one", gap 1.4–1.9
+        let offset = try #require(p.silenceOffset(of: out, envelope: env))
+        #expect(abs(1.4 + offset - 1.7) < 0.02)
+    }
+
+    @Test func frameSnap() throws {
+        let (p, id) = try project()
+        let start = BoundaryRef(clip: id, segment: 0, inPoint: true)   // 1.0 - 0.12 = 0.88
+        let offset = try #require(p.frameSnappedOffset(of: start, fps: 30))
+        #expect(abs((1.0 + offset) * 30 - ((1.0 + offset) * 30).rounded()) < 0.03)
+        #expect(abs(1.0 + offset - 0.88) <= 1.0 / 60 + 0.001)
+    }
+}

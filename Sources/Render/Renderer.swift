@@ -53,6 +53,37 @@ public struct Renderer {
         return Rendered(slug: slug, name: clip.name, file: file, duration: duration)
     }
 
+    /// The clips joined end to end, in the order given, as one file (`<slug>.mp4` +
+    /// `<slug>.vtt`, or `<slug>.preview.mp4`). Joins between clips get the same audio
+    /// crossfade as omissions.
+    public func renderSupercut(_ clips: [Clip], slug: String, into directory: URL, options: Options,
+                               progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Rendered {
+        let perClip = clips.map { project.resolvedSegments(of: $0, sourceDuration: info.duration) }
+        let segments = perClip.flatMap { $0 }
+        guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
+        let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
+                                                       crossfade: project.settings.crossfade)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent(slug + (options.preview ? ".preview.mp4" : ".mp4"))
+        let quality: ClipExporter.Quality = options.preview ? .preview : .full(options.codec ?? project.settings.codec ?? info.codec)
+        try await ClipExporter.export(built, info: info, quality: quality, to: file, progress: progress)
+        if !options.preview {
+            let vtt = Captions.webVTT(supercut: clips, in: project, segmentCounts: perClip.map(\.count),
+                                      sourceRanges: built.sourceRanges, clipStarts: built.segmentStarts)
+            try vtt.write(to: directory.appendingPathComponent(slug).appendingPathExtension("vtt"), atomically: true, encoding: .utf8)
+        }
+        let duration = built.sourceRanges.reduce(0) { $0 + $1.duration }
+        return Rendered(slug: slug, name: "Supercut (\(clips.count) clips)", file: file, duration: duration)
+    }
+
+    /// `<base>-supercut`, made distinct from every clip's slug.
+    public func supercutSlug(base: String) -> String {
+        let taken = Set(project.slugs().values)
+        var slug = slugify(base).isEmpty ? "supercut" : slugify(base) + "-supercut"
+        while taken.contains(slug) { slug += "-all" }
+        return slug
+    }
+
     /// `notes.md` listing the exported clips, with their notes as footnotes.
     public func notesFile(for rendered: [Rendered]) -> String {
         var lines = ["# Exported clips", ""]

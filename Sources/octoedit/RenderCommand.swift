@@ -34,6 +34,9 @@ struct RenderCommand: AsyncParsableCommand {
     @Option(help: "Output folder (default: the package's exports/ folder).")
     var dest: String?
 
+    @Flag(help: "Also join the exported clips, in order, into one <project>-supercut.mp4.")
+    var supercut = false
+
     func run() async throws {
         let pkg = URL(cliPath: package)
         let loaded = try PackageReader.load(pkg)
@@ -72,12 +75,21 @@ struct RenderCommand: AsyncParsableCommand {
         let outDir = dest.map(URL.init(cliPath:)) ?? pkg.appendingPathComponent(preview ? "exports/preview" : "exports")
         let options = Renderer.Options(codec: codec, preview: preview)
         let preview = preview
+        let supercut = supercut
 
         let work = Task { () -> [Renderer.Rendered] in
             var done: [Renderer.Rendered] = []
             for (n, clip) in selected.enumerated() {
                 let label = "[\(n + 1)/\(selected.count)] \(slugs[clip.id]!)"
                 let r = try await renderer.render(clip, into: outDir, options: options) { Console.progress(label, $0) }
+                done.append(r)
+                print(r.file.path)
+            }
+            if supercut {
+                let slug = renderer.supercutSlug(base: pkg.deletingPathExtension().lastPathComponent)
+                let r = try await renderer.renderSupercut(selected, slug: slug, into: outDir, options: options) {
+                    Console.progress("[supercut] \(slug)", $0)
+                }
                 done.append(r)
                 print(r.file.path)
             }

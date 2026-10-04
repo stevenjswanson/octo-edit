@@ -51,6 +51,14 @@ public enum PackageWriter {
         if !fm.fileExists(atPath: ignore.path) { try write(PackageLayout.gitignoreContents, to: ignore) }
     }
 
+    /// Writes only the waveform cache (e.g. rebuilt by the GUI when it was missing),
+    /// leaving transcript.md and everything else alone.
+    public static func saveWaveform(_ envelope: Envelope, to package: URL) throws {
+        try FileManager.default.createDirectory(at: package.appendingPathComponent(PackageLayout.cacheDir),
+                                                withIntermediateDirectories: true)
+        try WaveformFile.encode(envelope).write(to: package.appendingPathComponent(PackageLayout.waveform), options: .atomic)
+    }
+
     /// The source path as it should be written: relative to the package when the video
     /// lives beside the package (same parent folder tree), absolute otherwise.
     public static func storedSourcePath(_ source: String, package: URL) -> String {
