@@ -63,6 +63,8 @@ enum MainMenu {
         m.addItem(item("Save", #selector(NSDocument.save(_:)), "s"))
         m.addItem(item("Save As…", #selector(NSDocument.saveAs(_:)), "s", [.command, .shift]))
         m.addItem(item("Revert to Saved", #selector(NSDocument.revertToSaved(_:))))
+        m.addItem(.separator())
+        m.addItem(item("Export Clips…", #selector(ProjectDocument.exportClips(_:)), "e", [.command, .shift]))
         return m
     }
 
@@ -110,6 +112,10 @@ enum MainMenu {
             .separator(),
             item("Set Clip Start at Playhead", #selector(ProjectDocument.setClipStart(_:)), "i", []),
             item("Set Clip End at Playhead", #selector(ProjectDocument.setClipEnd(_:)), "o", []),
+            .separator(),
+            item("Inspect Cut…", #selector(ProjectDocument.inspectCut(_:)), "b"),
+            item("Suggest Names for Clip", #selector(ProjectDocument.suggestNames(_:)), "n", [.command, .option]),
+            item("Name Unnamed Clips", #selector(ProjectDocument.nameUnnamedClips(_:))),
             .separator(),
             item("Delete Clip", #selector(ProjectDocument.deleteClip(_:)), "\u{8}", [.command, .option]),
         ]

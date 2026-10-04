@@ -37,7 +37,10 @@ final class ProjectDocument: NSDocument {
 
     override func read(from url: URL, ofType typeName: String) throws {
         let result = try PackageReader.load(url)
-        MainActor.assumeIsolated { model.apply(result) }
+        MainActor.assumeIsolated {
+            model.packageURL = url
+            model.apply(result)
+        }
         transcriptStamp = FileStamp(Self.transcriptURL(url))
         startWatching(url)
     }
@@ -53,6 +56,7 @@ final class ProjectDocument: NSDocument {
         // Absolute here; Save re-relativizes against the (possibly new) package location.
         if let source = MainActor.assumeIsolated({ model.sourceURL }) { project.source = source.path }
         try PackageWriter.save(project, to: url)
+        if saveOperation != .saveToOperation { MainActor.assumeIsolated { model.packageURL = url } }
         transcriptStamp = FileStamp(Self.transcriptURL(url))
         if saveOperation != .saveToOperation { startWatching(url) }
     }
@@ -114,6 +118,12 @@ final class ProjectDocument: NSDocument {
     @objc func setClipStart(_ sender: Any?) { MainActor.assumeIsolated { model.setBoundaryAtPlayhead(inPoint: true) } }
     @objc func setClipEnd(_ sender: Any?) { MainActor.assumeIsolated { model.setBoundaryAtPlayhead(inPoint: false) } }
     @objc func deleteClip(_ sender: Any?) { MainActor.assumeIsolated { model.deleteClip() } }
+    @objc func inspectCut(_ sender: Any?) { MainActor.assumeIsolated { model.inspectNearest() } }
+    @objc func exportClips(_ sender: Any?) { MainActor.assumeIsolated { model.showExport() } }
+    @objc func suggestNames(_ sender: Any?) {
+        MainActor.assumeIsolated { if let id = model.selectedClip { model.suggestNames(for: id) } }
+    }
+    @objc func nameUnnamedClips(_ sender: Any?) { MainActor.assumeIsolated { model.nameUnnamedClips() } }
 
     @objc func togglePlayPause(_ sender: Any?) { MainActor.assumeIsolated { model.togglePlay() } }
     @objc func toggleAutoPreview(_ sender: Any?) {
@@ -141,6 +151,10 @@ final class ProjectDocument: NSDocument {
             case #selector(setClipStart(_:)), #selector(setClipEnd(_:)):
                 transcriptFocused && m.canEdit && m.selectedClip != nil && m.currentWord != nil
             case #selector(deleteClip(_:)): m.canEdit && m.selectedClip != nil
+            case #selector(inspectCut(_:)): m.canEdit && !m.project.clips.isEmpty
+            case #selector(exportClips(_:)): !m.project.clips.isEmpty && !m.loadErrors && !m.sourceMissing
+            case #selector(suggestNames(_:)): m.canEdit && m.selectedClip != nil
+            case #selector(nameUnnamedClips(_:)): m.canEdit && m.project.clips.contains { $0.name == nil }
             default: nil
             }
         }

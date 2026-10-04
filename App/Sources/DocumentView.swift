@@ -13,7 +13,7 @@ struct DocumentView: View {
                 SourcePane(model: model, locate: document.locateSource)
                     .focusOutline(model.activePane == .source)
                     .frame(minWidth: 420, idealWidth: 820)
-                ClipPreviewPane(preview: model.preview, focus: { model.focus(.preview) })
+                ClipPreviewPane(model: model, preview: model.preview, focus: { model.focus(.preview) })
                     .focusOutline(model.activePane == .preview)
                     .frame(minWidth: 300, idealWidth: 520)
             }
@@ -22,8 +22,9 @@ struct DocumentView: View {
             VStack(spacing: 0) {
                 if !model.issues.isEmpty { IssuesBanner(issues: model.issues) }
                 TranscriptView(model: model, revision: model.revision, selectedClip: model.selectedClip,
-                               currentWord: model.currentWord,
-                               reveal: model.reveal)
+                               currentWord: model.currentWord, followPlayhead: model.anyPlaying,
+                               reveal: model.reveal, inspected: model.inspected,
+                               inspectRequest: model.inspectRequest)
                     .overlay(alignment: .bottom) {
                         if let toast = model.toast {
                             Text(toast.text)
@@ -39,6 +40,9 @@ struct DocumentView: View {
 
             ClipShelf(model: model)
                 .frame(minHeight: 120, idealHeight: 128, maxHeight: 160)
+        }
+        .sheet(isPresented: Binding(get: { model.showingExport }, set: { model.showingExport = $0 })) {
+            ExportSheet(export: model.exporter, model: model, close: { model.showingExport = false })
         }
     }
 }
@@ -69,6 +73,7 @@ struct SourcePane: View {
 
 /// Plays the selected clip exactly as it will export (omissions cut, crossfades in).
 struct ClipPreviewPane: View {
+    let model: DocumentModel
     let preview: PreviewModel
     let focus: () -> Void
     @Bindable private var settings = PlaybackSettings.shared
@@ -99,6 +104,9 @@ struct ClipPreviewPane: View {
             SegmentStrip(segments: preview.segments, duration: preview.duration)
                 .frame(height: 8)
                 .padding(.horizontal, 10).padding(.vertical, 6)
+            if let id = model.selectedClip, model.project.clip(id) != nil {
+                ClipInfoPanel(model: model, clipID: id)
+            }
         }
         .background(Color(nsColor: .underPageBackgroundColor))
     }

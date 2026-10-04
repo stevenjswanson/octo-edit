@@ -14,6 +14,10 @@ final class PreviewModel {
     private(set) var duration: Double = 0
     private(set) var message: String?
     private(set) var building = false
+    /// The preview playhead as a source time (for the inspector's playhead line).
+    private(set) var position: Double?
+    /// Whether the preview is playing, observable by views (the play/pause button).
+    private(set) var isPlayingObserved = false
 
     @ObservationIgnored let player = AVPlayer()
     @ObservationIgnored private var asset: AVURLAsset?
@@ -29,6 +33,7 @@ final class PreviewModel {
     @ObservationIgnored private var programmaticSeeks = 0
     /// Pauses an auto-preview excerpt at its end.
     @ObservationIgnored private var stopObserver: Any?
+    @ObservationIgnored private var readyCue: Cue?
 
     /// What auto preview plays once the rebuilt clip is ready. Source times, so they
     /// survive the rebuild; resolved against the new composition.
@@ -36,6 +41,8 @@ final class PreviewModel {
         case start                                    // the first few seconds
         case end                                      // the last few seconds
         case around(from: Double, to: Double)         // a changed source span, ± the length
+        case loop(around: Double, half: Double)       // repeat ±half around a source-time cut
+        case once(around: Double, half: Double)       // play ±half around a source-time cut, once
     }
 
     /// The user played or scrubbed the preview: its position as a source time.
@@ -46,14 +53,18 @@ final class PreviewModel {
     init() {
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 20), queue: .main) { [weak self] t in
             MainActor.assumeIsolated {
-                guard let self, self.programmaticSeeks == 0, self.built != nil,
-                      let source = self.sourceTime(forClip: t.seconds) else { return }
+                guard let self, self.built != nil, let source = self.sourceTime(forClip: t.seconds) else { return }
+                self.position = source
+                guard self.programmaticSeeks == 0 else { return }
                 self.onTime(source)
             }
         }
         rateObserver = player.observe(\.rate) { [weak self] p, _ in
-            guard p.rate != 0 else { return }
-            DispatchQueue.main.async { self?.onPlay() }
+            let playing = p.rate != 0
+            DispatchQueue.main.async {
+                self?.isPlayingObserved = playing
+                if playing { self?.onPlay() }
+            }
         }
     }
 
@@ -91,7 +102,11 @@ final class PreviewModel {
         let wasPlaying = player.rate != 0
         let keepSource = sameClip ? sourceTime(forClip: player.currentTime().seconds) : nil
         let keepTime = sameClip ? player.currentTime().seconds : 0
-        let cue = wasPlaying ? nil : cue
+        // Auto preview never interrupts playback; inspector cues always (re)start.
+        let cue: Cue? = switch cue {
+        case .loop, .once: cue
+        default: wasPlaying ? nil : cue
+        }
         cancelExcerpt()
         if wasPlaying { player.pause() }
         clipID = clip.id
@@ -123,7 +138,11 @@ final class PreviewModel {
                     target = min(keepTime, max(duration - 0.05, 0))
                 }
                 pendingSeek = nil
-                if let cue, PlaybackSettings.shared.autoPreview {
+                let cue = readyCue ?? cue
+                readyCue = nil
+                if let cue, cue.isInspectorCue {
+                    await playExcerpt(cue)
+                } else if let cue, PlaybackSettings.shared.autoPreview {
                     await playExcerpt(cue)
                 } else {
                     await quietSeek(min(target, max(duration - 0.02, 0)))
@@ -176,10 +195,32 @@ final class PreviewModel {
 
     // MARK: Auto preview
 
+    /// Pause/resume without dropping a loop (the loop's observer stays registered).
+    func pauseOrResume() {
+        if player.rate != 0 { player.pause() } else { player.play() }
+    }
+
+    var isPlaying: Bool { player.rate != 0 }
+
+    /// Plays a cue now on the current composition (e.g. starting the inspector's loop).
+    func play(_ cue: Cue) {
+        guard built != nil else { return }
+        Task { await playExcerpt(cue) }
+    }
+
     private func playExcerpt(_ cue: Cue) async {
+        cancelExcerpt()
         let length = PlaybackSettings.shared.autoPreviewLength
         let (from, to): (Double, Double)
+        var loops = false
         switch cue {
+        case .loop(let t, let half):
+            let c = clipTime(atOrAfterSource: t) ?? duration
+            (from, to) = (c - half, c + half)
+            loops = true
+        case .once(let t, let half):
+            let c = clipTime(atOrAfterSource: t) ?? duration
+            (from, to) = (c - half, c + half)
         case .start:
             (from, to) = (0, length)
         case .end:
@@ -192,7 +233,20 @@ final class PreviewModel {
         let start = min(max(from, 0), max(duration - 0.05, 0))
         let stop = min(max(to, start + 0.1), duration)
         await quietSeek(start)
-        if stop < duration - 0.01 {
+        if loops {
+            // At the end of the span (or the clip), jump back and keep going.
+            let end = min(stop, duration - 0.03)
+            stopObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: end, preferredTimescale: 600))],
+                                                          queue: .main) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    Task {
+                        await self.quietSeek(start)
+                        self.player.play()
+                    }
+                }
+            }
+        } else if stop < duration - 0.01 {
             stopObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: stop, preferredTimescale: 600))],
                                                           queue: .main) { [weak self] in
                 MainActor.assumeIsolated {
@@ -202,6 +256,13 @@ final class PreviewModel {
             }
         }
         player.play()
+    }
+
+    var hasActiveExcerpt: Bool { stopObserver != nil }
+
+    /// Plays a cue once the composition being built is ready (or now, if it is).
+    func playWhenReady(_ cue: Cue) {
+        if built != nil && !building { play(cue) } else { readyCue = cue }
     }
 
     /// Stops waiting to pause an excerpt (the user took over, or the clip changed).
@@ -234,5 +295,14 @@ final class PreviewModel {
             return start + (t - range.start)
         }
         return nil
+    }
+}
+
+extension PreviewModel.Cue {
+    var isInspectorCue: Bool {
+        switch self {
+        case .loop, .once: true
+        default: false
+        }
     }
 }

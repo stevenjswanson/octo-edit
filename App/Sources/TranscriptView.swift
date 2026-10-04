@@ -24,12 +24,18 @@ struct TranscriptView: NSViewRepresentable {
     let revision: Int
     let selectedClip: ClipID?
     let currentWord: Int?
+    let followPlayhead: Bool
     let reveal: (word: Int, request: Int)?
+    let inspected: BoundaryRef?
+    let inspectRequest: Int
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = WordTextView(usingTextLayoutManager: true)
+        // TextKit 1: exact (not estimated) layout, so restyling never moves the text, and
+        // temporary attributes for the playhead highlight that don't touch the text.
+        let textView = WordTextView(usingTextLayoutManager: false)
+        textView.layoutManager?.allowsNonContiguousLayout = false
         // Editable only so there is a caret (arrow keys, ⇧/⌘-arrow selection); every
         // text change is refused in shouldChangeTextIn, so the words never change here.
         textView.isEditable = true
@@ -70,11 +76,12 @@ struct TranscriptView: NSViewRepresentable {
             c.revealRequest = reveal.request
             c.reveal(reveal.word)
         }
-        c.highlight(currentWord)
+        c.highlight(currentWord, follow: followPlayhead)
+        c.updateInspector(inspected, request: inspectRequest)
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, NSPopoverDelegate {
         let model: DocumentModel
         weak var textView: WordTextView?
         var revision = -1
@@ -83,57 +90,98 @@ struct TranscriptView: NSViewRepresentable {
         var wordRanges: [NSRange] = []
         var highlighted: NSRange?
         private var settingSelection = false
+        private var popover: NSPopover?
+        private var popoverRequest = -1
+        /// A bold bar at the inspected cut, so it's clear in the text which one is open.
+        private var cutMark: NSView?
 
         init(model: DocumentModel) { self.model = model }
 
-        /// Replaces the text, keeping the view still: the word at the top of the view
-        /// stays at the same height, and the caret stays at the same word.
+        /// Brings the text up to date by patching it: only the characters that changed
+        /// are replaced and only differing attributes are set, so TextKit keeps the
+        /// layout (and the scroll position) of everything else. The caret stays at
+        /// the same word.
         func rebuild(revision: Int, selectedClip: ClipID?, scroll: NSScrollView) {
-            guard let textView else { return }
+            guard let textView, let storage = textView.textStorage else { return }
             self.revision = revision
             self.selectedClip = selectedClip
-            let anchor = topVisibleWord()
             let caretWord = textView.selectedRange().length == 0 && !wordRanges.isEmpty
                 ? min(firstWord(endingAfter: textView.selectedRange().location), wordRanges.count - 1) : nil
             let firstSelected = textView.selectedRange().length > 0 ? words(in: textView.selectedRange())?.lowerBound : nil
+            let origin = scroll.contentView.bounds.origin
 
             let built = TranscriptText.build(model.project, selectedClip: selectedClip)
             wordRanges = built.wordRanges
-            highlighted = nil
             settingSelection = true
-            textView.textStorage?.setAttributedString(built.text)
+            Self.patch(storage, to: built.text)
+            // The playhead highlight is re-applied by the next update.
+            textView.layoutManager?.removeTemporaryAttribute(.backgroundColor,
+                                                             forCharacterRange: NSRange(location: 0, length: storage.length))
+            highlighted = nil
             if let s = model.selection, let r = charRange(words: s) {
                 textView.setSelectedRange(r)
             } else if let w = firstSelected ?? caretWord, wordRanges.indices.contains(w) {
                 textView.setSelectedRange(NSRange(location: wordRanges[w].location, length: 0))
             }
             settingSelection = false
-            if let anchor { restore(anchor, in: scroll) }
+            // Belt and braces: if anything still nudged the view, put it back.
+            if scroll.contentView.bounds.origin != origin {
+                scroll.contentView.scroll(to: origin)
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
         }
 
-        /// The first word at least partly visible, and its distance below the top edge.
-        private func topVisibleWord() -> (word: Int, offset: CGFloat)? {
-            guard let textView, let tlm = textView.textLayoutManager, let content = tlm.textContentManager,
-                  !wordRanges.isEmpty else { return nil }
-            let top = textView.visibleRect.minY
-            guard let fragment = tlm.textLayoutFragment(for: CGPoint(x: 0, y: top - textView.textContainerOrigin.y + 1)) else { return nil }
-            let c = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
-            var w = firstWord(endingAfter: c)
-            // Step forward to the first word whose top is in view.
-            while w < wordRanges.count, let r = rect(for: wordRanges[w]), r.minY < top - 0.5 { w += 1 }
-            guard w < wordRanges.count, let r = rect(for: wordRanges[w]) else { return nil }
-            return (w, r.minY - top)
+        /// The attributes the transcript sets. NSTextStorage adds others of its own, which
+        /// must not make every run look changed (that would relayout everything).
+        static let styledKeys: [NSAttributedString.Key] = [
+            .font, .foregroundColor, .backgroundColor, .paragraphStyle, .strikethroughStyle,
+            .octoWord, .octoMarkerClip, .octoMarkerIn,
+        ]
+
+        static func sameStyling(_ a: [NSAttributedString.Key: Any], _ b: [NSAttributedString.Key: Any]) -> Bool {
+            styledKeys.allSatisfy { k in
+                switch (a[k] as AnyObject?, b[k] as AnyObject?) {
+                case (nil, nil): true
+                case let (x?, y?): x.isEqual(y)
+                default: false
+                }
+            }
         }
 
-        private func restore(_ anchor: (word: Int, offset: CGFloat), in scroll: NSScrollView) {
-            guard let textView, let tlm = textView.textLayoutManager, wordRanges.indices.contains(anchor.word),
-                  let target = textRange(wordRanges[anchor.word]),
-                  let docStart = tlm.textContentManager?.documentRange.location else { return }
-            // Lay out everything above the anchor so its position is real, not estimated.
-            tlm.ensureLayout(for: NSTextRange(location: docStart, end: target.endLocation) ?? target)
-            guard let r = rect(for: wordRanges[anchor.word]) else { return }
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(r.minY - anchor.offset, 0)))
-            scroll.reflectScrolledClipView(scroll.contentView)
+        /// Makes `storage` equal `target` with the smallest edit: the common prefix and
+        /// suffix of the characters are kept, the middle replaced; in the kept parts,
+        /// attributes are written only where they differ.
+        static func patch(_ storage: NSTextStorage, to target: NSAttributedString) {
+            let old = storage.string as NSString, new = target.string as NSString
+            let oldLen = old.length, newLen = new.length
+            var prefix = 0
+            let maxPrefix = min(oldLen, newLen)
+            while prefix < maxPrefix, old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
+            var suffix = 0
+            while suffix < min(oldLen, newLen) - prefix,
+                  old.character(at: oldLen - 1 - suffix) == new.character(at: newLen - 1 - suffix) { suffix += 1 }
+
+            storage.beginEditing()
+            // Attributes in the kept prefix and suffix (positions in `target`).
+            func syncAttributes(_ range: NSRange, oldOffset: Int) {
+                guard range.length > 0 else { return }
+                target.enumerateAttributes(in: range) { attrs, r, _ in
+                    var eff = NSRange()
+                    let current = storage.attributes(at: r.location + oldOffset, longestEffectiveRange: &eff,
+                                                     in: NSRange(location: r.location + oldOffset, length: r.length))
+                    if eff.length < r.length || !sameStyling(current, attrs) {
+                        storage.setAttributes(attrs, range: NSRange(location: r.location + oldOffset, length: r.length))
+                    }
+                }
+            }
+            syncAttributes(NSRange(location: 0, length: prefix), oldOffset: 0)
+            syncAttributes(NSRange(location: newLen - suffix, length: suffix), oldOffset: oldLen - newLen)
+            let middleOld = NSRange(location: prefix, length: oldLen - prefix - suffix)
+            let middleNew = NSRange(location: prefix, length: newLen - prefix - suffix)
+            if middleOld.length > 0 || middleNew.length > 0 {
+                storage.replaceCharacters(in: middleOld, with: target.attributedSubstring(from: middleNew))
+            }
+            storage.endEditing()
         }
 
         // MARK: Selection ↔ words
@@ -178,6 +226,7 @@ struct TranscriptView: NSViewRepresentable {
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !settingSelection, let textView else { return }
             let r = textView.selectedRange()
+            if !wordRanges.isEmpty { model.caretWord = min(firstWord(endingAfter: r.location), wordRanges.count - 1) }
             model.selection = r.length == 0 ? nil : words(in: r)
         }
 
@@ -230,51 +279,95 @@ struct TranscriptView: NSViewRepresentable {
         }
 
         func rect(for r: NSRange) -> NSRect? {
-            guard let textView, let tlm = textView.textLayoutManager, let range = textRange(r) else { return nil }
-            var out: NSRect?
-            tlm.enumerateTextSegments(in: range, type: .standard, options: []) { _, frame, _, _ in
-                out = out.map { $0.union(frame) } ?? frame
-                return true
-            }
-            return out.map { $0.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y) }
+            guard let textView, let lm = textView.layoutManager, let tc = textView.textContainer,
+                  NSMaxRange(r) <= (textView.textStorage?.length ?? 0) else { return nil }
+            let glyphs = lm.glyphRange(forCharacterRange: r, actualCharacterRange: nil)
+            let rect = lm.boundingRect(forGlyphRange: glyphs, in: tc)
+            return rect.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
         }
 
         private var highlightedWord: Int?
-        private var savedBackground: Any?
 
-        /// Marks the word under the playhead by changing its background in the text
-        /// itself (restoring the clip band afterwards), and keeps it in view.
-        func highlight(_ word: Int?) {
-            guard let textView, let storage = textView.textStorage else { return }
+        /// Marks the word under the playhead with a temporary (display-only) attribute,
+        /// so the text itself — and its layout — never changes during playback. Scrolls
+        /// only when the playhead moves to another word while a video is playing.
+        func highlight(_ word: Int?, follow: Bool) {
+            guard let textView, let lm = textView.layoutManager else { return }
             let range = word.flatMap { wordRanges.indices.contains($0) ? wordRanges[$0] : nil }
             guard range != highlighted else { return }
-            storage.beginEditing()
-            if let old = highlighted, NSMaxRange(old) <= storage.length {
-                if let bg = savedBackground { storage.addAttribute(.backgroundColor, value: bg, range: old) }
-                else { storage.removeAttribute(.backgroundColor, range: old) }
+            let length = textView.textStorage?.length ?? 0
+            if let old = highlighted, NSMaxRange(old) <= length {
+                lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: old)
             }
             highlighted = range
-            if let range {
-                savedBackground = storage.attribute(.backgroundColor, at: range.location, effectiveRange: nil)
-                storage.addAttribute(.backgroundColor, value: NSColor.findHighlightColor, range: range)
+            if let range, NSMaxRange(range) <= length {
+                lm.addTemporaryAttribute(.backgroundColor, value: NSColor.findHighlightColor, forCharacterRange: range)
             }
-            storage.endEditing()
-            // Scroll only when the playhead actually moved to another word (not when the
-            // highlight is re-applied after a rebuild), so edits never move the view.
-            if word != highlightedWord, let range { textView.scrollRangeToVisible(range) }
+            if follow, word != highlightedWord, let range { textView.scrollRangeToVisible(range) }
             highlightedWord = word
+        }
+
+        // MARK: Boundary inspector popover
+
+        /// Shows, moves or closes the inspector popover to match the model.
+        func updateInspector(_ b: BoundaryRef?, request: Int) {
+            guard let textView else { return }
+            guard let b else {
+                if let popover, popover.isShown { popover.close() }
+                cutMark?.removeFromSuperview()
+                cutMark = nil
+                return
+            }
+            guard let rect = anchorRect(b) else { return }
+            placeCutMark(b, at: rect, in: textView)
+            if let popover, popover.isShown {
+                popover.positioningRect = rect
+                return
+            }
+            guard request != popoverRequest else { return }
+            popoverRequest = request
+            let p = NSPopover()
+            p.behavior = .semitransient
+            p.animates = false
+            p.delegate = self
+            let host = NSHostingController(rootView: BoundaryInspector(model: model, dismiss: { [weak p] in p?.performClose(nil) }))
+            host.sizingOptions = [.preferredContentSize]   // the popover takes the SwiftUI view's size
+            p.contentViewController = host
+            p.show(relativeTo: rect, of: textView, preferredEdge: .maxY)
+            popover = p
+        }
+
+        private func placeCutMark(_ b: BoundaryRef, at rect: NSRect, in textView: NSTextView) {
+            let mark = cutMark ?? {
+                let v = NSView()
+                v.wantsLayer = true
+                v.layer?.cornerRadius = 2
+                textView.addSubview(v)
+                cutMark = v
+                return v
+            }()
+            mark.layer?.backgroundColor = markerColor(b.clip).cgColor
+            mark.layer?.borderColor = NSColor.labelColor.cgColor
+            mark.layer?.borderWidth = 0.5
+            mark.frame = NSRect(x: rect.midX - 2.5, y: rect.minY - 5, width: 5, height: rect.height + 10)
+        }
+
+        /// A thin rect at the cut: before the anchor word for an in-point, after it for an out-point.
+        private func anchorRect(_ b: BoundaryRef) -> NSRect? {
+            guard let w = model.project.anchorWord(of: b), wordRanges.indices.contains(w),
+                  let r = rect(for: wordRanges[w]) else { return nil }
+            return NSRect(x: b.inPoint ? r.minX - 1 : r.maxX, y: r.minY, width: 2, height: r.height)
+        }
+
+        func popoverDidClose(_ notification: Notification) {
+            if model.inspected != nil { model.closeInspector() }
+            popover = nil
         }
 
         func markerColor(_ clip: ClipID) -> NSColor {
             ClipPalette.nsColor(model.project.clips.firstIndex { $0.id == clip } ?? 0)
         }
 
-        func textRange(_ r: NSRange) -> NSTextRange? {
-            guard let content = textView?.textLayoutManager?.textContentManager,
-                  let start = content.location(content.documentRange.location, offsetBy: r.location),
-                  let end = content.location(start, offsetBy: r.length) else { return nil }
-            return NSTextRange(location: start, end: end)
-        }
     }
 }
 
@@ -286,10 +379,21 @@ final class WordTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if let marker = marker(at: point) {
+            if event.clickCount == 2, let coordinator, let b = coordinator.model.boundary(for: marker) {
+                coordinator.model.inspect(b)
+                return
+            }
             trackMarker(marker, from: event)
             return
         }
         super.mouseDown(with: event)   // runs the selection tracking loop until mouse-up
+        // Double-clicking a cut-out word opens the inspector at the nearest cut.
+        if event.clickCount == 2, let w = word(at: point), let coordinator,
+           let storage = textStorage, coordinator.wordRanges.indices.contains(w),
+           storage.attribute(.strikethroughStyle, at: coordinator.wordRanges[w].location, effectiveRange: nil) != nil {
+            coordinator.model.inspectNearest(word: w)
+            return
+        }
         guard selectedRange().length == 0, let w = word(at: point), let coordinator else { return }
         if coordinator.model.clicked(word: w), coordinator.wordRanges.indices.contains(w) {
             setSelectedRange(coordinator.wordRanges[w])

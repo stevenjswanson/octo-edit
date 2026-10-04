@@ -9,6 +9,7 @@ struct ClipShelf: View {
     var body: some View {
         let project = model.project
         let slugs = project.slugs()
+        HStack(spacing: 0) {
         ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
@@ -20,7 +21,10 @@ struct ClipShelf: View {
                         card(n, clip, slug: slugs[clip.id] ?? "", duration: project.duration(of: clip),
                              selected: clip.id == model.selectedClip)
                             .id(clip.id)
-                            .onTapGesture { model.select(clip: clip.id, reveal: true, seekSource: true) }
+                            .onTapGesture {
+                                model.select(clip: clip.id, reveal: true, seekSource: true)
+                                model.focus(.preview)
+                            }
                     }
                 }
                 .padding(8)
@@ -28,6 +32,14 @@ struct ClipShelf: View {
             .onChange(of: model.selectedClip) { _, id in
                 if let id { withAnimation { proxy.scrollTo(id) } }
             }
+        }
+            Divider()
+            Button { model.showExport() } label: {
+                Label("Export…", systemImage: "square.and.arrow.up")
+            }
+            .disabled(project.clips.isEmpty || model.loadErrors || model.sourceMissing)
+            .help("Export clips (⇧⌘E)")
+            .padding(.horizontal, 12)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }

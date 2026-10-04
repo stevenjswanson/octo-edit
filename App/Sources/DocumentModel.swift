@@ -12,7 +12,7 @@ final class DocumentModel {
     private(set) var issues: [Issue] = []
     private(set) var sourceURL: URL?
     private(set) var sourceMissing = false
-    private(set) var envelope: Envelope?
+    var envelope: Envelope?
     /// Bumped whenever `project` changes, so views can rebuild derived state cheaply.
     private(set) var revision = 0
     /// Errors in transcript.md (from Load) make the document read-only until fixed on disk.
@@ -29,10 +29,36 @@ final class DocumentModel {
     /// Index into `project.words` of the word under the source playhead.
     private(set) var currentWord: Int?
     private(set) var isPlaying = false
+    /// Either video playing: the transcript follows the playhead only then.
+    var anyPlaying: Bool { isPlaying || preview.isPlayingObserved }
 
     enum Pane { case source, preview }
-    /// The video pane Space controls: the one last clicked, played or scrubbed.
-    private(set) var activePane = Pane.source
+    /// The video pane Space controls. The preview unless the user deliberately turns
+    /// to the source (clicks in it, plays it, or clicks a word outside every clip).
+    private(set) var activePane = Pane.preview
+    /// The source playhead (for the inspector's playhead line).
+    private(set) var sourceTime: Double?
+
+    // Boundary inspector (B3).
+    /// The cut being inspected; the transcript shows the inspector popover for it.
+    var inspected: BoundaryRef?
+    /// Bumped to (re)present the inspector even when `inspected` is unchanged.
+    var inspectRequest = 0
+    /// Loop playback across the inspected cut.
+    var loopCut = false
+    var analyzingWaveform = false
+    /// Source frame rate, for frame nudges and frame snapping.
+    var sourceFPS: Double = 30
+    /// Clips whose names are being suggested (✨ shows a spinner).
+    var suggesting = Set<ClipID>()
+    @ObservationIgnored var warnedAboutNamer = false
+    var showingExport = false
+    @ObservationIgnored let exporter = ExportModel()
+
+    /// The word at the transcript caret (for ⌘B with no selection).
+    @ObservationIgnored var caretWord: Int?
+    /// The package on disk (set by the document), for writing the waveform cache.
+    @ObservationIgnored var packageURL: URL?
 
     @ObservationIgnored let player = AVPlayer()
     @ObservationIgnored let preview = PreviewModel()
@@ -91,6 +117,8 @@ final class DocumentModel {
         if result.sourceURL != sourceURL || player.currentItem == nil { attachSource(result.sourceURL) }
         setProject(result.project)
         playheadMoved(player.currentTime().seconds)
+        // Packages made before the cache existed (or copied without it): rebuild it.
+        if envelope == nil { analyzeWaveform() }
     }
 
     func setSource(_ url: URL) {
@@ -104,6 +132,15 @@ final class DocumentModel {
         sourceMissing = !FileManager.default.fileExists(atPath: url.path)
         player.replaceCurrentItem(with: sourceMissing ? nil : AVPlayerItem(url: url))
         preview.attach(source: sourceMissing ? nil : url)
+        if !sourceMissing {
+            let asset = AVURLAsset(url: url)
+            Task {
+                if let track = try? await asset.loadTracks(withMediaType: .video).first,
+                   let fps = try? await track.load(.nominalFrameRate), fps > 0 {
+                    sourceFPS = Double(fps)
+                }
+            }
+        }
         thumbnails.attach(source: sourceMissing ? nil : url)
     }
 
@@ -115,6 +152,7 @@ final class DocumentModel {
             timeline = p.words.indices.compactMap { i in p.words[i].start.map { ($0, i) } }.sorted { $0.start < $1.start }
         }
         if let id = selectedClip, p.clip(id) == nil { selectedClip = nil }
+        if let b = inspected, p.role(of: b) == nil { inspected = nil }
         if let s = selection, s.upperBound >= p.words.count { selection = nil }
         refreshPreview()
     }
@@ -270,6 +308,9 @@ final class DocumentModel {
         nextCue = cue
     }
 
+    func queuePreviewCue(_ cue: PreviewModel.Cue) { nextCue = cue }
+    func refreshPreviewNow() { refreshPreview() }
+
     /// Source-time extent of the timed words in `r`.
     private func span(of r: ClosedRange<Int>) -> (start: Double, end: Double)? {
         let timed = r.filter { project.words[$0].isTimed }
@@ -298,6 +339,8 @@ final class DocumentModel {
     /// playback also stops it; returns true then (the view selects the word).
     @discardableResult
     func clicked(word i: Int) -> Bool {
+        // Inside a clip the preview is lined up with the word; outside, only the source can play it.
+        activePane = project.clip(containingWordAt: i) == nil ? .source : .preview
         let wasPlaying = player.rate != 0 || preview.player.rate != 0
         if wasPlaying {
             player.pause()
@@ -321,17 +364,15 @@ final class DocumentModel {
     }
 
     func seek(to t: Double) {
-        programmaticSourceSeek = true
         player.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadMoved(t)
     }
 
     /// The source player's time moved (playing, scrubbing, or a seek we made).
     private func sourceTimeChanged(_ t: Double) {
-        if programmaticSourceSeek { programmaticSourceSeek = false } else { activePane = .source }
+        sourceTime = t
         playheadMoved(t)
     }
-    @ObservationIgnored private var programmaticSourceSeek = false
 
     func focus(_ pane: Pane) { activePane = pane }
 

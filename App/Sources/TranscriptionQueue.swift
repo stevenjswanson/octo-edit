@@ -10,3 +10,13 @@ protocol TranscriptionQueue: Sendable {
 struct PassThroughTranscriptionQueue: TranscriptionQueue {
     func run<T: Sendable>(_ job: @Sendable () async throws -> T) async throws -> T { try await job() }
 }
+
+/// App-wide gate for exports (several windows exporting at once would contend for the
+/// hardware encoder). A pass-through in v1, like TranscriptionQueue.
+protocol ExportQueue: Sendable {
+    func run<T: Sendable>(_ job: @Sendable () async throws -> T) async throws -> T
+}
+
+struct PassThroughExportQueue: ExportQueue {
+    func run<T: Sendable>(_ job: @Sendable () async throws -> T) async throws -> T { try await job() }
+}
