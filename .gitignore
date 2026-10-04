@@ -7,3 +7,4 @@ Fixtures/generated/
 *.octoedit/cache/
 *.octoedit/exports/
 Fixtures/real/
+App/Generated/

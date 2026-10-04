@@ -10,6 +10,15 @@ let package = Package(
     platforms: [.macOS(.v26)],
     products: [
         .executable(name: "octoedit", targets: ["octoedit"]),
+        // Libraries the GUI app (App/project.yml) links.
+        .library(name: "Core", targets: ["Core"]),
+        .library(name: "Load", targets: ["Load"]),
+        .library(name: "Save", targets: ["Save"]),
+        .library(name: "Ingest", targets: ["Ingest"]),
+        .library(name: "Transcribe", targets: ["Transcribe"]),
+        .library(name: "Waveform", targets: ["Waveform"]),
+        .library(name: "Render", targets: ["Render"]),
+        .library(name: "Naming", targets: ["Naming"]),
     ],
     dependencies: [
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),

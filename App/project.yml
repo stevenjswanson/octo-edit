@@ -1,0 +1,57 @@
+# Generate the Xcode project with `xcodegen generate` (run in App/); the .xcodeproj is gitignored.
+name: OctoEdit
+options:
+  bundleIdPrefix: edu.ucsd
+  deploymentTarget:
+    macOS: "26.0"
+packages:
+  OctoEditKit:
+    path: ..
+settings:
+  base:
+    SWIFT_VERSION: "5.0"            # Swift 5 language mode on the Swift 6 toolchain (AppKit/AVKit glue)
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    CODE_SIGN_IDENTITY: "-"         # ad-hoc locally; Developer ID later
+    ENABLE_HARDENED_RUNTIME: NO
+targets:
+  OctoEdit:
+    type: application
+    platform: macOS
+    sources: [Sources]
+    dependencies:
+      - package: OctoEditKit
+        product: Core
+      - package: OctoEditKit
+        product: Load
+      - package: OctoEditKit
+        product: Save
+      - package: OctoEditKit
+        product: Ingest
+      - package: OctoEditKit
+        product: Transcribe
+      - package: OctoEditKit
+        product: Waveform
+      - package: OctoEditKit
+        product: Render
+      - package: OctoEditKit
+        product: Naming
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: OctoEdit
+        NSPrincipalClass: NSApplication
+        LSApplicationCategoryType: public.app-category.video
+        NSSpeechRecognitionUsageDescription: OctoEdit transcribes your recordings on this Mac to time each word.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: OctoEdit Project
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSTypeIsPackage: true
+            LSItemContentTypes: [edu.ucsd.octoedit.project]
+            NSDocumentClass: $(PRODUCT_MODULE_NAME).ProjectDocument
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: edu.ucsd.octoedit.project
+            UTTypeDescription: OctoEdit Project
+            UTTypeConformsTo: [com.apple.package, public.composite-content]
+            UTTypeTagSpecification:
+              public.filename-extension: [octoedit]
