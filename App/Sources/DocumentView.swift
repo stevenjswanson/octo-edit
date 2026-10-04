@@ -11,22 +11,34 @@ struct DocumentView: View {
         VSplitView {
             HSplitView {
                 SourcePane(model: model, locate: document.locateSource)
+                    .focusOutline(model.activePane == .source)
                     .frame(minWidth: 420, idealWidth: 820)
-                ClipPreviewPlaceholder()
+                ClipPreviewPane(preview: model.preview, focus: { model.focus(.preview) })
+                    .focusOutline(model.activePane == .preview)
                     .frame(minWidth: 300, idealWidth: 520)
             }
             .frame(minHeight: 240, idealHeight: 420)
 
             VStack(spacing: 0) {
                 if !model.issues.isEmpty { IssuesBanner(issues: model.issues) }
-                TranscriptView(project: model.project, revision: model.revision,
-                               currentWord: model.currentWord, followPlayhead: model.isPlaying,
-                               onClickWord: model.seek(toWord:))
+                TranscriptView(model: model, revision: model.revision, selectedClip: model.selectedClip,
+                               currentWord: model.currentWord,
+                               reveal: model.reveal)
+                    .overlay(alignment: .bottom) {
+                        if let toast = model.toast {
+                            Text(toast.text)
+                                .padding(.horizontal, 14).padding(.vertical, 8)
+                                .background(.regularMaterial, in: Capsule())
+                                .padding(.bottom, 12)
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: model.toast?.id)
             }
             .frame(minHeight: 200, idealHeight: 380)
 
             ClipShelf(model: model)
-                .frame(minHeight: 70, idealHeight: 90, maxHeight: 140)
+                .frame(minHeight: 120, idealHeight: 128, maxHeight: 160)
         }
     }
 }
@@ -49,18 +61,71 @@ struct SourcePane: View {
                 .padding()
                 .foregroundStyle(.white)
             } else {
-                PlayerView(player: model.player)
+                PlayerView(player: model.player, onFocus: { model.focus(.source) })
             }
         }
     }
 }
 
-/// Filled in by B2 (clip preview playing the Render composition).
-struct ClipPreviewPlaceholder: View {
+/// Plays the selected clip exactly as it will export (omissions cut, crossfades in).
+struct ClipPreviewPane: View {
+    let preview: PreviewModel
+    let focus: () -> Void
+    @Bindable private var settings = PlaybackSettings.shared
+
     var body: some View {
-        ZStack {
-            Color(nsColor: .underPageBackgroundColor)
-            Text("Clip preview").foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            HStack {
+                Text(preview.title.isEmpty ? "Clip preview" : preview.title)
+                    .font(.headline).lineLimit(1)
+                Spacer()
+                Toggle("Auto preview", isOn: $settings.autoPreview)
+                    .toggleStyle(.checkbox).controlSize(.small)
+                    .help("After an edit, play the spot that changed (⇧⌘P)")
+                if preview.building { ProgressView().controlSize(.small) }
+                if preview.duration > 0 {
+                    Text(ClipShelf.duration(preview.duration)).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            ZStack {
+                Color.black
+                if let message = preview.message {
+                    Text(message).foregroundStyle(.secondary)
+                } else {
+                    PlayerView(player: preview.player, onFocus: focus)
+                }
+            }
+            SegmentStrip(segments: preview.segments, duration: preview.duration)
+                .frame(height: 8)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+        }
+        .background(Color(nsColor: .underPageBackgroundColor))
+    }
+}
+
+extension View {
+    /// The video pane Space controls gets an accent outline.
+    func focusOutline(_ on: Bool) -> some View {
+        overlay(Rectangle().strokeBorder(on ? Color.accentColor : .clear, lineWidth: 2).allowsHitTesting(false))
+    }
+}
+
+/// The kept segments of the previewed clip, end to end; the gaps mark the joins.
+struct SegmentStrip: View {
+    let segments: [(start: Double, duration: Double)]
+    let duration: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            let gap: CGFloat = segments.count > 1 ? 3 : 0
+            let usable = max(geo.size.width - gap * CGFloat(max(segments.count - 1, 0)), 0)
+            HStack(spacing: gap) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, s in
+                    RoundedRectangle(cornerRadius: 2).fill(Color.accentColor.opacity(0.7))
+                        .frame(width: duration > 0 ? usable * s.duration / duration : 0)
+                }
+            }
         }
     }
 }

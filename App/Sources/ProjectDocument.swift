@@ -20,6 +20,7 @@ final class ProjectDocument: NSDocument {
     override class var autosavesInPlace: Bool { false }
 
     override func makeWindowControllers() {
+        MainActor.assumeIsolated { model.undoManager = undoManager }
         let host = NSHostingController(rootView: DocumentView(model: model, document: self))
         let window = NSWindow(contentViewController: host)
         window.styleMask.insert(.fullSizeContentView)
@@ -102,6 +103,48 @@ final class ProjectDocument: NSDocument {
             presentError(error)
             transcriptStamp = FileStamp(Self.transcriptURL(url))
         }
+    }
+
+    // MARK: Clip commands
+
+    @objc func makeClip(_ sender: Any?) { MainActor.assumeIsolated { model.makeClip() } }
+    @objc func extendClip(_ sender: Any?) { MainActor.assumeIsolated { model.extendClip() } }
+    @objc func omitSelection(_ sender: Any?) { MainActor.assumeIsolated { model.omitSelection() } }
+    @objc func restoreSelection(_ sender: Any?) { MainActor.assumeIsolated { model.restoreSelection() } }
+    @objc func setClipStart(_ sender: Any?) { MainActor.assumeIsolated { model.setBoundaryAtPlayhead(inPoint: true) } }
+    @objc func setClipEnd(_ sender: Any?) { MainActor.assumeIsolated { model.setBoundaryAtPlayhead(inPoint: false) } }
+    @objc func deleteClip(_ sender: Any?) { MainActor.assumeIsolated { model.deleteClip() } }
+
+    @objc func togglePlayPause(_ sender: Any?) { MainActor.assumeIsolated { model.togglePlay() } }
+    @objc func toggleAutoPreview(_ sender: Any?) {
+        MainActor.assumeIsolated { PlaybackSettings.shared.autoPreview.toggle() }
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        let responder = windowControllers.first?.window?.firstResponder
+        let transcriptFocused = responder is WordTextView
+        if item.action == #selector(togglePlayPause(_:)) {
+            // Leave Space to text fields being typed in.
+            if let text = responder as? NSTextView, text.isEditable, !(text is WordTextView) { return false }
+            return true
+        }
+        if item.action == #selector(toggleAutoPreview(_:)) {
+            (item as? NSMenuItem)?.state = MainActor.assumeIsolated { PlaybackSettings.shared.autoPreview } ? .on : .off
+            return true
+        }
+        let m = model
+        let enabled: Bool? = MainActor.assumeIsolated {
+            switch item.action {
+            case #selector(makeClip(_:)): m.canEdit && m.canMakeClip
+            case #selector(extendClip(_:)): m.canEdit && m.canExtend
+            case #selector(omitSelection(_:)), #selector(restoreSelection(_:)): transcriptFocused && m.canEdit && m.canOmit
+            case #selector(setClipStart(_:)), #selector(setClipEnd(_:)):
+                transcriptFocused && m.canEdit && m.selectedClip != nil && m.currentWord != nil
+            case #selector(deleteClip(_:)): m.canEdit && m.selectedClip != nil
+            default: nil
+            }
+        }
+        return enabled ?? super.validateUserInterfaceItem(item)
     }
 
     // MARK: Source video

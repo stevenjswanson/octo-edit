@@ -16,6 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @MainActor @objc func importVideo(_ sender: Any?) {
+        ImportWindowController.shared.begin()
+    }
+
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
 }
 

@@ -8,6 +8,8 @@ enum MainMenu {
         bar.addItem(submenu(appMenu()))
         bar.addItem(submenu(fileMenu()))
         bar.addItem(submenu(editMenu()))
+        bar.addItem(submenu(clipMenu()))
+        bar.addItem(submenu(playbackMenu()))
         let window = windowMenu()
         bar.addItem(submenu(window))
         NSApp.windowsMenu = window
@@ -46,6 +48,9 @@ enum MainMenu {
 
     private static func fileMenu() -> NSMenu {
         let m = NSMenu(title: "File")
+        let importItem = item("Import Video…", #selector(AppDelegate.importVideo(_:)), "i", [.command, .shift])
+        importItem.target = NSApp.delegate
+        m.addItem(importItem)
         m.addItem(item("Open…", #selector(NSDocumentController.openDocument(_:)), "o"))
         // NSDocumentController fills a submenu whose item uses clearRecentDocuments:.
         let recent = item("Open Recent", nil)
@@ -74,6 +79,40 @@ enum MainMenu {
         m.addItem(item("Find…", #selector(NSTextView.performFindPanelAction(_:)), "f"))
         m.items.last?.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
         return m
+    }
+
+    private static func clipMenu() -> NSMenu {
+        let m = NSMenu(title: "Clip")
+        for item in clipItems() { m.addItem(item) }
+        return m
+    }
+
+    private static func playbackMenu() -> NSMenu {
+        let m = NSMenu(title: "Playback")
+        // Bare Space: disabled while a text field is being typed in, so it never steals spaces.
+        m.addItem(item("Play/Pause", #selector(ProjectDocument.togglePlayPause(_:)), " ", []))
+        m.addItem(.separator())
+        m.addItem(item("Auto Preview", #selector(ProjectDocument.toggleAutoPreview(_:)), "p", [.command, .shift]))
+        return m
+    }
+
+    /// Clip commands, shared by the Clip menu and the transcript's context menu. They go
+    /// to the first responder (ProjectDocument handles them). The bare-key shortcuts
+    /// (⌫, ⇧⌫, I, O) are enabled only while the transcript has focus, so they never
+    /// steal keystrokes from a text field.
+    static func clipItems() -> [NSMenuItem] {
+        [
+            item("New Clip from Selection", #selector(ProjectDocument.makeClip(_:)), "k"),
+            item("Extend Clip to Selection", #selector(ProjectDocument.extendClip(_:)), "e"),
+            .separator(),
+            item("Omit Selection", #selector(ProjectDocument.omitSelection(_:)), "\u{8}", []),
+            item("Restore Selection", #selector(ProjectDocument.restoreSelection(_:)), "\u{8}", .shift),
+            .separator(),
+            item("Set Clip Start at Playhead", #selector(ProjectDocument.setClipStart(_:)), "i", []),
+            item("Set Clip End at Playhead", #selector(ProjectDocument.setClipEnd(_:)), "o", []),
+            .separator(),
+            item("Delete Clip", #selector(ProjectDocument.deleteClip(_:)), "\u{8}", [.command, .option]),
+        ]
     }
 
     private static func windowMenu() -> NSMenu {
