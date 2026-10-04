@@ -32,6 +32,32 @@ public enum Captions {
         return render(words)
     }
 
+    /// Joins WebVTT files written by `webVTT`, shifting each by its start time and
+    /// renumbering the cues.
+    public static func concatenate(_ parts: [(vtt: String, start: Seconds)]) -> String {
+        var out = "WEBVTT\n"
+        var n = 0
+        for (vtt, start) in parts {
+            let blocks = vtt.components(separatedBy: "\n\n").dropFirst()   // skip the header
+            for block in blocks {
+                let lines = block.split(separator: "\n", omittingEmptySubsequences: true)
+                guard let timing = lines.firstIndex(where: { $0.contains(" --> ") }) else { continue }
+                let ends = lines[timing].components(separatedBy: " --> ")
+                guard ends.count == 2, let a = parseStamp(ends[0]), let b = parseStamp(ends[1]) else { continue }
+                n += 1
+                out += "\n\(n)\n\(stamp(a + start)) --> \(stamp(b + start))\n"
+                out += lines[(timing + 1)...].joined(separator: "\n") + "\n"
+            }
+        }
+        return out
+    }
+
+    static func parseStamp(_ s: String) -> Seconds? {
+        let p = s.trimmingCharacters(in: .whitespaces).split(separator: ":")
+        guard p.count == 3, let h = Double(p[0]), let m = Double(p[1]), let sec = Double(p[2]) else { return nil }
+        return h * 3600 + m * 60 + sec
+    }
+
     struct Timed { var text: String; var start: Seconds; var end: Seconds; var speaker: String?; var group: Int }
 
     static func timedWords(_ clip: Clip, in p: Project, sourceRanges: [ResolvedSegment], clipStarts: [Seconds],

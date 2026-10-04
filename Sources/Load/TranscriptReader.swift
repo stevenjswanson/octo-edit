@@ -44,6 +44,9 @@ struct Reader {
     let lines: [Substring]
     var issues: [Issue] = []
     var project = Project(source: "")
+    /// Words collected while parsing, handed to `project` once at the end: assigning
+    /// `Project.words` rebuilds its id index, so appending to it word by word is quadratic.
+    var words: [Word] = []
 
     // Paragraph state
     var paragraphOpen = false
@@ -151,6 +154,7 @@ struct Reader {
         endParagraph()
         if let c = openClip { error("clip opened here is never closed with {/clip}", c.line) }
         if let f = openFence { error("omit opened here is never closed with ~~", f.line) }
+        project.words = words
         buildClips()
     }
 
@@ -186,8 +190,8 @@ struct Reader {
             }
             switch t {
             case .word(let w):
-                let i = project.words.count
-                project.words.append(Word(id: WordID(i + 1), text: w, paragraph: project.paragraphs.last!.id))
+                let i = words.count
+                words.append(Word(id: WordID(i + 1), text: w, paragraph: project.paragraphs.last!.id))
                 if openFence != nil {
                     omitted.insert(i)
                     if openFence!.first < 0 { openFence!.first = i }
@@ -201,7 +205,7 @@ struct Reader {
                     error("clip opened inside omitted text", line)
                 } else {
                     openClip = PendingClip(name: name.flatMap { $0.isEmpty ? nil : $0 }, openOffset: offset,
-                                           first: project.words.count, line: line)
+                                           first: words.count, line: line)
                 }
             case .clipClose(let offset):
                 if let f = openFence {
@@ -263,8 +267,8 @@ struct Reader {
             for i in range {
                 if omitted.contains(i) {
                     if let a = runStart {
-                        segments.append(Segment(inPoint: Boundary(word: project.words[a].id, offset: pendingIn),
-                                                outPoint: Boundary(word: project.words[i - 1].id, offset: runOpen[i])))
+                        segments.append(Segment(inPoint: Boundary(word: words[a].id, offset: pendingIn),
+                                                outPoint: Boundary(word: words[i - 1].id, offset: runOpen[i])))
                         runStart = nil
                     }
                     if omitStart == nil { omitStart = i }
@@ -278,8 +282,8 @@ struct Reader {
                 }
             }
             if let a = runStart {
-                segments.append(Segment(inPoint: Boundary(word: project.words[a].id, offset: pendingIn),
-                                        outPoint: Boundary(word: project.words[c.last].id, offset: c.closeOffset)))
+                segments.append(Segment(inPoint: Boundary(word: words[a].id, offset: pendingIn),
+                                        outPoint: Boundary(word: words[c.last].id, offset: c.closeOffset)))
             } else {
                 warn("omitted text at the very end of a clip just shortens the clip", c.line)
                 if !segments.isEmpty { segments[segments.count - 1].outPoint.offset = c.closeOffset }

@@ -84,8 +84,8 @@ func samples(_ url: URL) async throws -> [Float] {
         defer { try? FileManager.default.removeItem(at: dir) }
         let r = try await Renderer(project: p, source: src)
         let out = try await r.render(p.clip(c)!, into: dir, options: .init())
-        #expect(out.file.lastPathComponent == "clip-01.mp4")
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("clip-01.vtt").path))
+        #expect(out.file.lastPathComponent == "clip-01-1080p.mp4")
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("clip-01-1080p.vtt").path))
 
         let asset = AVURLAsset(url: out.file)
         let video = try await asset.loadTracks(withMediaType: .video)[0]
@@ -134,7 +134,7 @@ func samples(_ url: URL) async throws -> [Float] {
         #expect(abs(out.duration - expected) < 0.1, "\(out.duration) vs \(expected)")
         let fileDuration = try await AVURLAsset(url: out.file).load(.duration).seconds
         #expect(abs(fileDuration - out.duration) < 0.1)
-        let vtt = try String(contentsOf: dir.appendingPathComponent("supercut-all.vtt"), encoding: .utf8)
+        let vtt = try String(contentsOf: dir.appendingPathComponent("supercut-all-1080p.vtt"), encoding: .utf8)
         #expect(vtt.contains("w1 w2"))
         #expect(vtt.contains("w5 w6"))
         #expect(!vtt.contains("w2 w5"))
@@ -154,7 +154,25 @@ func samples(_ url: URL) async throws -> [Float] {
         let (size, formats) = try await (v.load(.naturalSize), v.load(.formatDescriptions))
         #expect(size == CGSize(width: 1280, height: 720))
         #expect(CMFormatDescriptionGetMediaSubType(formats[0]) == kCMVideoCodecType_H264)
-        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("tone-test.vtt").path))
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("tone-test.preview.vtt").path))
+    }
+
+    /// 720p output: 1280×720 H.264, named -720p (captions too); full size is named 4k.
+    @Test(.enabled(if: haveTone)) func hd720IsLabelledAndScaled() async throws {
+        let src = fixture("tone-4k.mp4")
+        var p = secondsProject(source: src.path)
+        let c = try p.makeClip(words: 2...3, name: "Tone test")
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let r = try await Renderer(project: p, source: src)
+        #expect(r.resolutionLabel(.full) == "4k")
+        let out = try await r.render(p.clip(c)!, into: dir, options: .init(resolution: .hd720))
+        #expect(out.file.lastPathComponent == "tone-test-720p.mp4")
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("tone-test-720p.vtt").path))
+        let v = try await AVURLAsset(url: out.file).loadTracks(withMediaType: .video)[0]
+        let (size, formats) = try await (v.load(.naturalSize), v.load(.formatDescriptions))
+        #expect(size == CGSize(width: 1280, height: 720))
+        #expect(CMFormatDescriptionGetMediaSubType(formats[0]) == kCMVideoCodecType_H264)
     }
 
     @Test(.enabled(if: haveTone)) func cancellingLeavesNoFiles() async throws {
@@ -173,18 +191,48 @@ func samples(_ url: URL) async throws -> [Float] {
         #expect(left.isEmpty, "left behind: \(left)")
     }
 
-    @Test(.enabled(if: haveTone)) func notesFileListsClipsWithFootnotes() async throws {
-        var p = secondsProject(source: fixture("tone-4k.mp4").path)
+    @Test func clipNotesHaveTitleAndNotes() throws {
+        var p = secondsProject(source: "x.mp4")
         let a = try p.makeClip(words: 0...1, name: "First")
-        _ = try p.makeClip(words: 3...4)
+        let b = try p.makeClip(words: 3...4)
         try p.setNotes(clip: a, "Keep this one.\nIt matters.")
-        let r = try await Renderer(project: p, source: fixture("tone-4k.mp4"))
-        let notes = r.notesFile(for: [
-            .init(slug: "first", name: "First", file: URL(fileURLWithPath: "/x/first.mp4"), duration: 2.3),
-            .init(slug: "clip-02", name: nil, file: URL(fileURLWithPath: "/x/clip-02.mp4"), duration: 1.1),
-        ])
-        #expect(notes.contains("- [first.mp4](first.mp4) — First — 0:02.3[^first]"))
-        #expect(notes.contains("- [clip-02.mp4](clip-02.mp4) — clip-02 — 0:01.1\n"))
-        #expect(notes.contains("[^first]: Keep this one.\n    It matters."))
+        #expect(ExportNotes.clip(p.clip(a)!, in: p) == "# First\n\nKeep this one.\nIt matters.\n")
+        #expect(ExportNotes.clip(p.clip(b)!, in: p) == "# clip-02\n")
+    }
+
+    @Test func youTubeChapters() {
+        #expect(ExportNotes.chapters(["Intro", "Budget", "Hiring"], starts: [0.4, 65.9, 600]) == "0:00 Intro\n1:05 Budget\n10:00 Hiring")
+        #expect(ExportNotes.chapters(["A", "B"], starts: [0, 3725]) == "0:00:00 A\n1:02:05 B")
+    }
+
+    /// The fast supercut: the exported clip files joined without re-encoding.
+    @Test(.enabled(if: haveSine)) func joinedSupercutHasChaptersAndShiftedCaptions() async throws {
+        let src = fixture("sine-1080.mp4")
+        var p = secondsProject(source: src.path)
+        let a = try p.makeClip(words: 1...2, name: "First")
+        let b = try p.makeClip(words: 5...6, name: "Second")
+        try p.setNotes(clip: b, "About the second.")
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let r = try await Renderer(project: p, source: src)
+        let ra = try await r.render(p.clip(a)!, into: dir, options: .init())
+        let rb = try await r.render(p.clip(b)!, into: dir, options: .init())
+        let cut = try await r.joinSupercut([ra, rb], slug: "talk-supercut", into: dir, options: .init())
+        #expect(cut.file.lastPathComponent == "talk-supercut-1080p.mp4")
+        #expect(abs(cut.duration - (ra.duration + rb.duration)) < 0.1, "\(cut.duration) vs \(ra.duration + rb.duration)")
+        let vtt = try String(contentsOf: dir.appendingPathComponent("talk-supercut-1080p.vtt"), encoding: .utf8)
+        #expect(vtt.contains("w1 w2") && vtt.contains("w5 w6"))
+        // The second clip's caption starts where that clip starts in the supercut.
+        let lines = vtt.components(separatedBy: "\n")
+        let cueLine = try #require(lines.firstIndex { $0.contains("w5") })
+        let start = try #require(Captions.parseStamp(lines[cueLine - 1].components(separatedBy: " --> ")[0]))
+        let inClip = try #require(Captions.parseStamp(try String(contentsOf: dir.appendingPathComponent("second-1080p.vtt"), encoding: .utf8)
+            .components(separatedBy: "\n").first { $0.contains(" --> ") }!.components(separatedBy: " --> ")[0]))
+        #expect(abs(start - (ra.duration + inClip)) < 0.1, "\(start) vs \(ra.duration) + \(inClip)")
+        let md = try String(contentsOf: dir.appendingPathComponent("talk-supercut-1080p.md"), encoding: .utf8)
+        #expect(md.contains("0:00 First\n0:0"))
+        #expect(md.contains("Second"))
+        #expect(md.contains("About the second."))
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("second-1080p.md").path))
     }
 }

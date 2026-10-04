@@ -230,3 +230,51 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(abs(1.0 + offset - 0.88) <= 1.0 / 60 + 0.001)
     }
 }
+
+@Suite struct ClipEdgeTests {
+    /// Words 0…11, one per second; clip 1…10 with 4…5 omitted and offsets on both edges.
+    func project() throws -> (Project, ClipID) {
+        let words = (0..<12).map { Word(id: WordID($0), text: "w\($0)", start: Double($0), end: Double($0) + 0.8, paragraph: ParagraphID(0)) }
+        var p = Project(source: "x", paragraphs: [Paragraph(id: ParagraphID(0))], words: words)
+        let id = try p.makeClip(words: 1...10)
+        try p.omit(words: 4...5, in: id)
+        try p.setOffset(clip: id, segment: 0, inPoint: true, -0.3)
+        try p.setOffset(clip: id, segment: 1, inPoint: false, 0.4)
+        return (p, id)
+    }
+
+    @Test func endMovedBeforeAnOmissionDropsIt() throws {
+        var (p, id) = try project()
+        try p.moveClipEdge(id, start: false, to: 3)
+        let c = p.clip(id)!
+        #expect(c.segments.count == 1)
+        #expect(p.indexRange(of: c) == 1...3)
+        #expect(c.segments[0].inPoint.offset == -0.3)   // the start kept its offset
+        #expect(c.segments[0].outPoint.offset == nil)   // the moved end's was cleared
+    }
+
+    @Test func startMovedPastAnOmissionDropsIt() throws {
+        var (p, id) = try project()
+        try p.moveClipEdge(id, start: true, to: 7)
+        let c = p.clip(id)!
+        #expect(c.segments.count == 1)
+        #expect(p.indexRange(of: c) == 7...10)
+        #expect(c.segments[0].inPoint.offset == nil)
+        #expect(c.segments[0].outPoint.offset == 0.4)
+    }
+
+    @Test func trimInsideKeepsTheOmissionAndExtendKeepsNewWords() throws {
+        var (p, id) = try project()
+        try p.moveClipEdge(id, start: false, to: 7)
+        #expect(p.clip(id)!.segments.map { p.indexRange(of: $0)! } == [1...3, 6...7])
+        try p.moveClipEdge(id, start: false, to: 11)
+        #expect(p.clip(id)!.segments.map { p.indexRange(of: $0)! } == [1...3, 6...11])
+        #expect(throws: EditError.self) { try p.moveClipEdge(id, start: false, to: 0) }
+    }
+
+    @Test func edgeLandingInsideTheOmissionSnapsToKeptWords() throws {
+        var (p, id) = try project()
+        try p.moveClipEdge(id, start: false, to: 5)   // end inside the omitted 4…5
+        #expect(p.clip(id)!.segments.map { p.indexRange(of: $0)! } == [1...3])
+    }
+}

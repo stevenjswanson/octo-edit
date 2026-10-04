@@ -7,6 +7,8 @@ public enum ClipExporter {
     public enum Quality: Sendable {
         /// Same resolution and frame rate as the input; codec from settings or the input's.
         case full(Codec)
+        /// 1280×720 H.264 (there is no 720p HEVC preset), same frame rate.
+        case hd720
         /// Fast, small 720p H.264 for checking cuts.
         case preview
     }
@@ -15,7 +17,7 @@ public enum ClipExporter {
     /// dimensions, otherwise "highest quality", which keeps the source size.
     public static func preset(for info: SourceInfo, quality: Quality) -> String {
         switch quality {
-        case .preview:
+        case .preview, .hd720:
             return AVAssetExportPreset1280x720
         case .full(.hevc):
             switch (info.width, info.height) {
@@ -49,6 +51,30 @@ public enum ClipExporter {
         // the source's GOPs through and hide the extra frames with edit lists, which many
         // players and upload sites ignore (stray frames at every cut).
         session.videoComposition = try await AVVideoComposition.videoComposition(withPropertiesOf: built.composition)
+        try await run(session, to: url, progress: progress)
+    }
+
+    /// Concatenates finished files (same encoding settings) without re-encoding.
+    /// Each file starts on a keyframe, so the samples can be copied as they are.
+    public static func join(_ files: [URL], to url: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> [Seconds] {
+        let comp = AVMutableComposition()
+        var starts: [Seconds] = []
+        for file in files {
+            let asset = AVURLAsset(url: file)
+            let duration = try await asset.load(.duration)
+            starts.append(comp.duration.seconds)
+            try await comp.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: asset, at: comp.duration)
+        }
+        guard let session = AVAssetExportSession(asset: comp, presetName: AVAssetExportPresetPassthrough) else {
+            throw RenderError.exportFailed("no pass-through export session")
+        }
+        try await run(session, to: url, progress: progress)
+        return starts
+    }
+
+    /// Runs an export session into `url`, atomically and cancellably.
+    private static func run(_ session: AVAssetExportSession, to url: URL,
+                            progress: @escaping @Sendable (Double) -> Void) async throws {
         // Export to a hidden temporary name and rename when done, so a half-written
         // file (which players can't open) never appears under the clip's name.
         let fm = FileManager.default

@@ -9,8 +9,10 @@ struct RenderCommand: AsyncParsableCommand {
         commandName: "render",
         abstract: "Export the clips marked in a project's transcript.md.",
         discussion: """
-        Each clip becomes <slug>.mp4 (same resolution and frame rate as the input,
-        hardware-encoded) with <slug>.vtt captions; notes.md lists what was exported.
+        Each clip becomes <slug>-4k.mp4 (same resolution and frame rate as the input,
+        hardware-encoded; the label is the resolution) with <slug>-4k.vtt captions and
+        <slug>-4k.md notes, or <slug>-720p.* with --720p. --supercut also joins them into
+        one video whose .md has YouTube chapters.
         Use --check to validate transcript.md without rendering, and --preview for fast
         720p <slug>.preview.mp4 versions in exports/preview/.
         """
@@ -28,13 +30,16 @@ struct RenderCommand: AsyncParsableCommand {
     @Option(help: "Output codec (default: the project's, else same as the input).")
     var codec: Codec?
 
+    @Flag(name: .customLong("720p"), help: "Export at 1280×720 (H.264) instead of the input's resolution.")
+    var hd720 = false
+
     @Option(name: .customLong("clip"), help: "Only this clip (by slug); repeatable.")
     var clips: [String] = []
 
     @Option(help: "Output folder (default: the package's exports/ folder).")
     var dest: String?
 
-    @Flag(help: "Also join the exported clips, in order, into one <project>-supercut.mp4.")
+    @Flag(help: "Also join the exported clips, in order, into one <project>-supercut-4k.mp4 (with chapters in its .md).")
     var supercut = false
 
     func run() async throws {
@@ -73,7 +78,7 @@ struct RenderCommand: AsyncParsableCommand {
 
         let renderer = try await Renderer(project: p, source: loaded.sourceURL)
         let outDir = dest.map(URL.init(cliPath:)) ?? pkg.appendingPathComponent(preview ? "exports/preview" : "exports")
-        let options = Renderer.Options(codec: codec, preview: preview)
+        let options = Renderer.Options(codec: codec, preview: preview, resolution: hd720 ? .hd720 : .full)
         let preview = preview
         let supercut = supercut
 
@@ -86,16 +91,13 @@ struct RenderCommand: AsyncParsableCommand {
                 print(r.file.path)
             }
             if supercut {
+                // Joined from the clips just exported: no second encode.
                 let slug = renderer.supercutSlug(base: pkg.deletingPathExtension().lastPathComponent)
-                let r = try await renderer.renderSupercut(selected, slug: slug, into: outDir, options: options) {
+                let r = try await renderer.joinSupercut(done, slug: slug, into: outDir, options: options) {
                     Console.progress("[supercut] \(slug)", $0)
                 }
                 done.append(r)
                 print(r.file.path)
-            }
-            if !preview {
-                let notes = outDir.appendingPathComponent("notes.md")
-                try renderer.notesFile(for: done).write(to: notes, atomically: true, encoding: .utf8)
             }
             return done
         }

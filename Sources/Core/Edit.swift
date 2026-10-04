@@ -157,6 +157,36 @@ extension Project {
         clips[ci].segments = segments
     }
 
+    /// Moves a clip's start (`start: true`) or end to word `w`, trimming or extending
+    /// the clip. Trimming past an omission drops it with the material it's in; newly
+    /// included words are kept. The moved edge's explicit offset is cleared (it was
+    /// measured from the old word); the other edge keeps its own.
+    public mutating func moveClipEdge(_ id: ClipID, start: Bool, to w: Int) throws {
+        let ci = try clipIndex(id)
+        guard words.indices.contains(w), let range = indexRange(of: clips[ci]) else { throw EditError.invalidRange }
+        let newRange: ClosedRange<Int>
+        if start {
+            guard w <= range.upperBound else { throw EditError.invalidRange }
+            newRange = w...range.upperBound
+        } else {
+            guard w >= range.lowerBound else { throw EditError.invalidRange }
+            newRange = range.lowerBound...w
+        }
+        if let other = clips.first(where: { $0.id != id && (indexRange(of: $0)?.overlaps(newRange) ?? false) }) {
+            throw EditError.overlapsClip(other.id)
+        }
+        let old = keptMask(clips[ci], over: range)
+        let kept = newRange.map { range.contains($0) ? old[$0 - range.lowerBound] : true }
+        guard kept.contains(true) else { throw EditError.wouldOmitEverything }
+        let firstOffset = start ? nil : clips[ci].segments.first?.inPoint.offset
+        let lastOffset = start ? clips[ci].segments.last?.outPoint.offset : nil
+        var segments = rebuiltSegments(clips[ci], range: newRange, kept: kept)
+        segments[0].inPoint.offset = firstOffset
+        segments[segments.count - 1].outPoint.offset = lastOffset
+        try checkPlaceable(segments)
+        clips[ci].segments = segments
+    }
+
     /// Moves a segment's in- or out-point to another word inside the same clip span.
     public mutating func moveBoundary(clip id: ClipID, segment k: Int, inPoint: Bool, to wordIndex: Int) throws {
         let ci = try clipIndex(id)
