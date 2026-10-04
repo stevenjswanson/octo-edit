@@ -64,9 +64,14 @@ extension DocumentModel {
         inspect(all[i + delta], play: true)
     }
 
+    /// Closing the inspector always stops what it started: the loop is turned off, any
+    /// excerpt or loop (playing, restarting, or queued behind a rebuild) is stopped.
     func closeInspector() {
+        let wasOpen = inspected != nil || loopCut
         inspected = nil
-        if loopCut { preview.cancelExcerpt(); preview.player.pause() }
+        loopCut = false
+        queuePreviewCueClear()
+        if wasOpen { preview.stopExcerpts() }
     }
 
     // MARK: Offsets
@@ -124,9 +129,11 @@ extension DocumentModel {
 
     // MARK: Loop
 
+    /// The Loop button is the inspector's play control: on plays ±1 s across the cut
+    /// over and over (and follows nudges); off stops.
     func setLoop(_ on: Bool) {
         loopCut = on
-        if on { replayCut() } else { preview.cancelExcerpt(); preview.player.pause() }
+        if on { focus(.preview); replayCut() } else { preview.stopExcerpts() }
     }
 
     /// Starts (or restarts) the loop across the inspected cut.
@@ -144,11 +151,7 @@ extension DocumentModel {
         if preview.clipID == b.clip, !preview.building { preview.play(cue) } else { preview.playWhenReady(cue) }
     }
 
-    /// Space in the inspector: pause or resume; when nothing is under way, play the cut.
-    func toggleCutPlayback() {
-        if preview.isPlaying { preview.pauseOrResume(); return }
-        if preview.hasActiveExcerpt { preview.pauseOrResume() } else { playCut() }
-    }
+
 
     // MARK: Waveform cache
 

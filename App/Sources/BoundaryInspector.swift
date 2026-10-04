@@ -117,14 +117,12 @@ struct BoundaryInspector: View {
                 Button("To Word Edge") { model.snapToWordEdge(b) }
                 Button("To Frame") { model.snapToFrame(b) }
                 Spacer()
-                Button { model.toggleCutPlayback() } label: {
-                    Image(systemName: model.preview.isPlayingObserved ? "pause.fill" : "play.fill")
+                Toggle(isOn: Binding(get: { model.loopCut }, set: { model.setLoop($0) })) {
+                    Label("Loop ±\(Int(DocumentModel.loopHalfWidth)) s", systemImage: model.loopCut ? "stop.fill" : "repeat")
                 }
+                .toggleStyle(.button)
                 .keyboardShortcut(.space, modifiers: [])
-                .help("Play across the cut (Space)")
-                Toggle("Loop ±\(Int(DocumentModel.loopHalfWidth)) s", isOn: Binding(get: { model.loopCut }, set: { model.setLoop($0) }))
-                    .toggleStyle(.button)
-                    .keyboardShortcut("l", modifiers: [])
+                .help("Play across the cut, over and over (Space). Click again to stop.")
             }
         }
     }

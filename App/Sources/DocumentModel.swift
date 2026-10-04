@@ -207,7 +207,7 @@ final class DocumentModel {
         case .overlapsClip(let id): return "That would overlap clip \(name(id))."
         case .outsideClip: return "Select words inside a single clip."
         case .wouldOmitEverything: return "Omitting that would leave the clip empty — delete the clip instead."
-        case .invalidRange: return "A clip can’t end before it starts."
+        case .invalidRange: return "A clip’s end can’t go before its start (or its start after its end)."
         case .some(let e): return e.description.prefix(1).uppercased() + e.description.dropFirst() + "."
         case nil: return String(describing: error)
         }
@@ -288,15 +288,14 @@ final class DocumentModel {
         moveBoundary(clip: id, inPoint: inPoint, to: w)
     }
 
-    /// Moves a clip's start or end marker to another word. An explicit offset belonged
-    /// to the old word, so it is cleared (the default pad applies again).
+    /// Moves a clip's start or end marker to another word, trimming or extending the
+    /// clip (an omission left outside it is dropped). The moved edge's explicit offset
+    /// belonged to the old word, so it is cleared (the default pad applies again).
     func moveBoundary(clip id: ClipID, inPoint: Bool, to word: Int) {
-        guard let clip = project.clip(id) else { return }
-        let k = inPoint ? 0 : clip.segments.count - 1
+        guard project.clip(id) != nil else { return }
         previewEdit(of: id, cue: inPoint ? .start : .end)
         let done = perform(inPoint ? "Move Clip Start" : "Move Clip End") {
-            try $0.moveBoundary(clip: id, segment: k, inPoint: inPoint, to: word)
-            try $0.setOffset(clip: id, segment: k, inPoint: inPoint, nil)
+            try $0.moveClipEdge(id, start: inPoint, to: word)
         }
         if !done { refreshPreview() }
     }
@@ -309,6 +308,7 @@ final class DocumentModel {
     }
 
     func queuePreviewCue(_ cue: PreviewModel.Cue) { nextCue = cue }
+    func queuePreviewCueClear() { nextCue = nil }
     func refreshPreviewNow() { refreshPreview() }
 
     /// Source-time extent of the timed words in `r`.

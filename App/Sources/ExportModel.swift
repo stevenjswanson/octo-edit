@@ -5,7 +5,8 @@ import Render
 
 /// The Export sheet's state. Exports the project as it is in the window (unsaved edits
 /// included) through Render — the same code as `octoedit render` — one clip at a time:
-/// `<slug>.mp4` + `<slug>.vtt` per clip, then `notes.md` for the clips exported.
+/// `<slug>-4k.mp4` + `.vtt` captions + `.md` notes per clip; the supercut is joined from
+/// those files (no second encode) and its `.md` carries YouTube chapters.
 @MainActor @Observable
 final class ExportModel {
     struct Row: Identifiable {
@@ -25,6 +26,18 @@ final class ExportModel {
     var codec: Codec?
     var destination: URL?
     var revealWhenDone = true
+    /// Full resolution or 720p; remembered between exports.
+    var resolution: Renderer.Resolution = Renderer.Resolution(rawValue: UserDefaults.standard.string(forKey: "exportResolution") ?? "") ?? .full {
+        didSet { UserDefaults.standard.set(resolution.rawValue, forKey: "exportResolution") }
+    }
+    /// The source's details, for labels ("4k") and the summary line.
+    private(set) var sourceInfo: SourceInfo?
+
+    /// The label that goes into file names for the chosen resolution.
+    var label: String {
+        if resolution == .hd720 { return "720p" }
+        return sourceInfo.map { Renderer.resolutionLabel(.full, info: $0) } ?? "full"
+    }
     /// Export each checked clip as its own file.
     var individualClips = true
     /// Also join the checked clips, in order, into one `<project>-supercut.mp4`.
@@ -62,6 +75,7 @@ final class ExportModel {
         if let source {
             Task {
                 if let info = try? await SourceInfo.read(source) {
+                    sourceInfo = info
                     sourceCodec = info.codec
                     sourceSummary = "\(info.width)×\(info.height), \(String(format: "%g", (info.frameRate * 100).rounded() / 100)) fps, \(info.codec.rawValue.uppercased())"
                 }
@@ -78,7 +92,10 @@ final class ExportModel {
         let individual = individualClips, makeSupercut = supercut
         // Work, in seconds of output, for the overall bar.
         let clipSeconds = chosen.map { project.duration(of: $0) }
-        let total = max((individual ? clipSeconds.reduce(0, +) : 0) + (makeSupercut ? clipSeconds.reduce(0, +) : 0), 0.001)
+        // Joining finished clips is nearly free; only a supercut encoded from the source
+        // (no individual clips) costs as much as the clips themselves.
+        let supercutWork = makeSupercut ? (individual ? clipSeconds.reduce(0, +) * 0.05 : clipSeconds.reduce(0, +)) : 0
+        let total = max((individual ? clipSeconds.reduce(0, +) : 0) + supercutWork, 0.001)
         var finished = 0.0
         overall = 0
         supercutState = makeSupercut ? .waiting : .skipped
@@ -88,7 +105,7 @@ final class ExportModel {
             rows[i].state = rows[i].include && individual ? .waiting : .skipped
         }
         phase = .exporting
-        let options = Renderer.Options(codec: codec)
+        let options = Renderer.Options(codec: codec, resolution: resolution)
         let queue = queue
         task = Task {
             var done: [Renderer.Rendered] = []
@@ -122,20 +139,26 @@ final class ExportModel {
                 }
                 if makeSupercut {
                     try Task.checkCancellation()
-                    let weight = clipSeconds.reduce(0, +)
+                    let weight = supercutWork
                     let slug = renderer.supercutSlug(base: packageName)
                     currentRow = nil
-                    currentLabel = "Joining \(chosen.count) clips into \(slug).mp4"
+                    currentLabel = "Joining \(chosen.count) clips into \(renderer.baseName(slug, options)).mp4"
                     supercutState = .exporting
                     do {
                         let base = finished
-                        let r = try await queue.run {
-                            try await renderer.renderSupercut(chosen, slug: slug, into: dest, options: options) { f in
-                                Task { @MainActor [weak self] in
-                                    self?.supercutProgress = f
-                                    self?.overall = (base + f * weight) / total
-                                }
+                        let update: @Sendable (Double) -> Void = { f in
+                            Task { @MainActor [weak self] in
+                                self?.supercutProgress = f
+                                self?.overall = (base + f * weight) / total
                             }
+                        }
+                        // Every clip exported this run: join the files. Otherwise encode it.
+                        let parts = done
+                        let joinable = individual && parts.count == chosen.count
+                        let r = try await queue.run {
+                            joinable
+                                ? try await renderer.joinSupercut(parts, slug: slug, into: dest, options: options, progress: update)
+                                : try await renderer.renderSupercut(chosen, slug: slug, into: dest, options: options, progress: update)
                         }
                         done.append(r)
                         supercutState = .done
@@ -149,10 +172,6 @@ final class ExportModel {
                 }
                 currentRow = nil
                 currentLabel = ""
-                if !done.isEmpty {
-                    try renderer.notesFile(for: done).write(to: dest.appendingPathComponent("notes.md"),
-                                                            atomically: true, encoding: .utf8)
-                }
                 var failed = rows.filter { if case .failed = $0.state { true } else { false } }.count
                 if case .failed = supercutState { failed += 1 }
                 phase = .finished("Exported \(done.count) file\(done.count == 1 ? "" : "s")"

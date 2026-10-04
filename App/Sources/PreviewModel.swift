@@ -34,6 +34,9 @@ final class PreviewModel {
     /// Pauses an auto-preview excerpt at its end.
     @ObservationIgnored private var stopObserver: Any?
     @ObservationIgnored private var readyCue: Cue?
+    /// Bumped whenever an excerpt is cancelled, so a loop restart already on its way
+    /// (seek back, then play) can tell it has been superseded.
+    @ObservationIgnored private var excerptGeneration = 0
 
     /// What auto preview plays once the rebuilt clip is ready. Source times, so they
     /// survive the rebuild; resolved against the new composition.
@@ -108,6 +111,8 @@ final class PreviewModel {
         default: wasPlaying ? nil : cue
         }
         cancelExcerpt()
+        // A stop (e.g. closing the inspector) while this rebuild runs cancels its cue.
+        let cueGeneration = excerptGeneration
         if wasPlaying { player.pause() }
         clipID = clip.id
         shownSegments = segs
@@ -138,7 +143,7 @@ final class PreviewModel {
                     target = min(keepTime, max(duration - 0.05, 0))
                 }
                 pendingSeek = nil
-                let cue = readyCue ?? cue
+                let cue = excerptGeneration == cueGeneration ? (readyCue ?? cue) : nil
                 readyCue = nil
                 if let cue, cue.isInspectorCue {
                     await playExcerpt(cue)
@@ -233,15 +238,17 @@ final class PreviewModel {
         let start = min(max(from, 0), max(duration - 0.05, 0))
         let stop = min(max(to, start + 0.1), duration)
         await quietSeek(start)
+        let generation = excerptGeneration
         if loops {
             // At the end of the span (or the clip), jump back and keep going.
             let end = min(stop, duration - 0.03)
             stopObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: end, preferredTimescale: 600))],
                                                           queue: .main) { [weak self] in
                 MainActor.assumeIsolated {
-                    guard let self else { return }
+                    guard let self, self.excerptGeneration == generation else { return }
                     Task {
                         await self.quietSeek(start)
+                        guard self.excerptGeneration == generation else { return }
                         self.player.play()
                     }
                 }
@@ -267,8 +274,17 @@ final class PreviewModel {
 
     /// Stops waiting to pause an excerpt (the user took over, or the clip changed).
     func cancelExcerpt() {
+        excerptGeneration += 1
         if let stopObserver { player.removeTimeObserver(stopObserver) }
         stopObserver = nil
+    }
+
+    /// Stops any excerpt or loop for good: nothing playing, nothing queued to play once
+    /// a composition finishes building.
+    func stopExcerpts() {
+        cancelExcerpt()
+        readyCue = nil
+        player.pause()
     }
 
     /// Space bar / Play-Pause: from the start again when at the end.

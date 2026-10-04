@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Core
+import Render
 
 /// File ▸ Export Clips…: choose clips and folder; watch them export. The codec is the
 /// project's (front matter), else the same as the input video.
@@ -20,7 +21,7 @@ struct ExportSheet: View {
                         Toggle("", isOn: $row.include).labelsHidden().disabled(export.isExporting)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(row.title).lineLimit(1)
-                            Text(row.slug + ".mp4").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text("\(row.slug)-\(export.label).mp4").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer()
                         status(row)
@@ -46,6 +47,12 @@ struct ExportSheet: View {
             .disabled(export.isExporting)
 
             Form {
+                Picker("Resolution", selection: $export.resolution) {
+                    Text("Full" + (export.sourceInfo.map { " (\(Renderer.resolutionLabel(.full, info: $0)), \($0.width)×\($0.height))" } ?? ""))
+                        .tag(Renderer.Resolution.full)
+                    Text("720p (1280×720)").tag(Renderer.Resolution.hd720)
+                }
+                .pickerStyle(.radioGroup)
                 LabeledContent("Folder") {
                     HStack {
                         Text(export.destination?.path ?? "—").lineLimit(1).truncationMode(.middle)
@@ -58,7 +65,7 @@ struct ExportSheet: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("Individual clips", isOn: $export.individualClips)
                         HStack(spacing: 6) {
-                            Toggle("Supercut — the checked clips joined in order", isOn: $export.supercut)
+                            Toggle("Supercut — the checked clips joined in order, with YouTube chapters", isOn: $export.supercut)
                             supercutStatus
                         }
                     }
@@ -68,7 +75,7 @@ struct ExportSheet: View {
             .disabled(export.isExporting)
 
             if !export.sourceSummary.isEmpty {
-                Text("Full resolution and frame rate of the video (\(export.sourceSummary)), hardware-encoded. Existing files with the same names are replaced.")
+                Text("Source: \(export.sourceSummary). Same frame rate, hardware-encoded; 720p is H.264. Files are named with the resolution, so 4k and 720p exports sit side by side; files with the same name are replaced.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

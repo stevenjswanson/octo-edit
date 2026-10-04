@@ -360,7 +360,9 @@ struct TranscriptView: NSViewRepresentable {
         }
 
         func popoverDidClose(_ notification: Notification) {
-            if model.inspected != nil { model.closeInspector() }
+            // However it closed (Done, Esc, a click elsewhere, or the cut going away),
+            // stop whatever the inspector was playing.
+            model.closeInspector()
             popover = nil
         }
 

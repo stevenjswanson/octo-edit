@@ -52,7 +52,7 @@ struct ClipInfoPanel: View {
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
                 if notes.isEmpty && focus != .notes {
-                    Text("Notes (saved with the project and written to notes.md on export)")
+                    Text("Notes (saved with the project; exported as the clip's .md file)")
                         .font(.callout).foregroundStyle(.tertiary).padding(.horizontal, 9).padding(.vertical, 8)
                         .allowsHitTesting(false)
                 }
