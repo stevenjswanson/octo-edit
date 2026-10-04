@@ -7,12 +7,12 @@ Produces, in Fixtures/generated/:
   meeting-1080.mp4      same content at 1080p (faster for iteration)
   meeting.zoom.vtt      Zoom-style transcript on the Zoom clock, with the kinds of
                         text differences a second recognizer produces
-  meeting.truth.tsv     ground-truth line timings on the source clock
+  meeting.truth.tsv     ground-truth line timings on the source clock (actual speech extents)
   tone-4k.mp4           10 s 4K clip with a 1 kHz tone burst every second (render tests)
 
 Speech comes from macOS `say`; media is assembled with ffmpeg.
 """
-import os, subprocess, sys, tempfile
+import array, os, subprocess, sys, tempfile, wave
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "Fixtures", "generated")
 ZOOM_OFFSET = 3.42          # Zoom clock = source clock + ZOOM_OFFSET
@@ -54,6 +54,17 @@ def duration(path):
     return float(out.stdout.strip())
 
 
+def speech_extent(path, threshold=0.003):
+    """First/last time (s) where 10 ms RMS exceeds threshold (≈ -50 dBFS): `say` pads with silence."""
+    with wave.open(path) as w:
+        rate = w.getframerate()
+        data = array.array("h", w.readframes(w.getnframes()))
+    win = rate // 100
+    loud = [k for k in range(0, len(data) - win, win)
+            if (sum(v * v for v in data[k:k + win]) / win) ** 0.5 / 32768 > threshold]
+    return (loud[0] / rate, (loud[-1] + win) / rate) if loud else (0.0, len(data) / rate)
+
+
 def ts(t):
     h, rem = divmod(max(t, 0.0), 3600)
     m, s = divmod(rem, 60)
@@ -76,7 +87,8 @@ def main():
         run("say", "-v", VOICES[speaker], "-o", aiff, spoken)
         run("ffmpeg", "-y", "-i", aiff, "-ar", str(RATE), "-ac", "1", wav)
         d = duration(wav)
-        pieces.append((t, t + d))
+        a, b = speech_extent(wav)
+        pieces.append((t + a, t + b))
         entries += [wav, silence]
         t += d + GAP
     with open(concat, "w") as f:
