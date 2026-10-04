@@ -44,8 +44,16 @@ enum Console {
         FileHandle.standardError.write(Data((s + "\n").utf8))
     }
 
-    static func issues(_ issues: [Issue], file: String) {
-        for i in issues { note("\(file):\(i.line.map(String.init) ?? "-"): \(i.severity.rawValue): \(i.message)") }
+    /// Errors first, in file order, then warnings; at most `limit` lines, since later
+    /// errors are often knock-on effects of the first.
+    static func issues(_ issues: [Issue], file: String, limit: Int = 10) {
+        let sorted = issues.filter { $0.severity == .error } + issues.filter { $0.severity == .warning }
+        for i in sorted.prefix(limit) {
+            note("\(file):\(i.line.map(String.init) ?? "-"): \(i.severity.rawValue): \(i.message)")
+        }
+        if sorted.count > limit {
+            note("…and \(sorted.count - limit) more. Fix the first error and re-check; later ones are often caused by it.")
+        }
     }
 }
 

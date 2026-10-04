@@ -93,6 +93,8 @@ public enum Token: Equatable, Sendable {
     case offset(Seconds)
     case noteReference(String)
     case invalid(String)
+    /// A `{` with no matching `}` on the line; holds the text up to the next space.
+    case unclosedMarker(String)
 }
 
 public enum Lexer {
@@ -109,8 +111,13 @@ public enum Lexer {
                 i = line.index(i, offsetBy: 2)
             } else if c == "{" {
                 guard let close = closingBrace(in: line, from: i) else {
-                    out.append(.invalid(String(line[i...])))
-                    break
+                    // Report just this fragment and keep lexing, so a missing `}`
+                    // doesn't swallow the fences that follow on the line.
+                    var j = line.index(after: i)
+                    while j < line.endIndex, line[j] != " ", line[j] != "\t", !starts("~~", at: j) { j = line.index(after: j) }
+                    out.append(.unclosedMarker(String(line[i..<j])))
+                    i = j
+                    continue
                 }
                 out.append(marker(line[line.index(after: i)..<close]))
                 i = line.index(after: close)
@@ -141,6 +148,8 @@ public enum Lexer {
             else if ch == "\\" && inQuote { escaped = true }
             else if ch == "\"" { inQuote.toggle() }
             else if ch == "}" && !inQuote { return k }
+            // A marker never contains another marker or a fence: the `}` is missing.
+            else if !inQuote && (ch == "{" || line[k...].hasPrefix("~~")) { return nil }
             k = line.index(after: k)
         }
         return nil

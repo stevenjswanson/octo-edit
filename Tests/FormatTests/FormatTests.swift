@@ -190,6 +190,25 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         #expect(parse(badMarker, []).issues.contains { $0.message.contains("unrecognized marker") })
     }
 
+    /// One typo must produce one error, not a cascade through the rest of the file.
+    @Test func typosDoNotCascade() {
+        let broken = handWritten
+            .replacingOccurrences(of: "~~{+40ms} um, let me find the, uh, {-60ms}~~", with: "~~{+40ms um, let me find the, uh, {-60ms}~~ ~~in~~")
+            .replacingOccurrences(of: "The second option ~~[crosstalk]~~ defers", with: "The second option ~~[crosstalk] defers")
+        let errors = parse(broken, []).issues.filter { $0.severity == .error }
+        #expect(errors.count == 2, "\(errors)")
+        #expect(errors[0].message == "{+40ms is missing its closing }")
+        #expect(errors[1].message == "~~ opened here is not closed before {/clip}")
+        // Each later paragraph still parses normally.
+        #expect(parse(broken, []).project.clips.map(\.name).contains("Hiring plan"))
+    }
+
+    @Test func outsideClipReportedOncePerFence() {
+        let text = handWritten.replacingOccurrences(of: "Welcome everyone.", with: "~~Welcome everyone.~~")
+        let errors = parse(text, []).issues.filter { $0.message.contains("must be inside a clip") }
+        #expect(errors.count == 1)
+    }
+
     @Test func strayNoteIsKeptAndWarned() {
         let edited = handWritten + "\n[^no-such-clip]: Remember to ask Dean.\n"
         let r = parse(edited)

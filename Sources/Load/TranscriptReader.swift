@@ -82,8 +82,9 @@ struct Reader {
         lines = text.split(separator: "\n", omittingEmptySubsequences: false)
     }
 
-    mutating func error(_ msg: String, _ line: Int) { issues.append(Issue(.error, msg, line: line)) }
-    mutating func warn(_ msg: String, _ line: Int) { issues.append(Issue(.warning, msg, line: line)) }
+    mutating func error(_ msg: String, _ line: Int) { add(Issue(.error, msg, line: line)) }
+    mutating func warn(_ msg: String, _ line: Int) { add(Issue(.warning, msg, line: line)) }
+    mutating func add(_ issue: Issue) { if !issues.contains(issue) { issues.append(issue) } }
 
     mutating func run() {
         var n = 0
@@ -163,6 +164,14 @@ struct Reader {
     }
 
     mutating func endParagraph() {
+        // An omission never continues past its paragraph (the writer fences each
+        // paragraph separately). Closing it here keeps one unbalanced ~~ from
+        // flipping every later fence in the file.
+        if let f = openFence {
+            error("~~ opened here is not closed before the end of the paragraph", f.line)
+            fences.append(f)
+            openFence = nil
+        }
         paragraphOpen = false
         inZoomParagraph = false
     }
@@ -180,7 +189,6 @@ struct Reader {
                 let i = project.words.count
                 project.words.append(Word(id: WordID(i + 1), text: w, paragraph: project.paragraphs.last!.id))
                 if openFence != nil {
-                    if openClip == nil { error("omitted text (~~) must be inside a clip", line) }
                     omitted.insert(i)
                     if openFence!.first < 0 { openFence!.first = i }
                     openFence!.last = i
@@ -196,7 +204,11 @@ struct Reader {
                                            first: project.words.count, line: line)
                 }
             case .clipClose(let offset):
-                if openFence != nil { error("{/clip} inside omitted text; close the ~~ first", line) }
+                if let f = openFence {
+                    error("~~ opened here is not closed before {/clip}", f.line)
+                    fences.append(f)
+                    openFence = nil
+                }
                 if var c = openClip {
                     c.closeOffset = offset
                     if c.last < c.first { error("clip has no words", c.line) } else { finishedClips.append(c) }
@@ -210,6 +222,7 @@ struct Reader {
                     openFence = nil
                 } else {
                     openFence = Fence(first: -1, line: line)
+                    if openClip == nil { error("omitted text (~~) must be inside a clip", line) }
                 }
             case .offset(let o):
                 if case .fence = previous, let f = openFence, f.first < 0 {
@@ -225,6 +238,8 @@ struct Reader {
                 }
             case .invalid(let s):
                 error("unrecognized marker \(s)", line)
+            case .unclosedMarker(let s):
+                error("\(s) is missing its closing }", line)
             }
             previous = t
         }
