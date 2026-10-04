@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 import Core
 
-/// File ▸ Export Clips…: choose clips, codec and folder; watch them export.
+/// File ▸ Export Clips…: choose clips and folder; watch them export. The codec is the
+/// project's (front matter), else the same as the input video.
 struct ExportSheet: View {
     @Bindable var export: ExportModel
     let model: DocumentModel
@@ -45,11 +46,6 @@ struct ExportSheet: View {
             .disabled(export.isExporting)
 
             Form {
-                Picker("Codec", selection: $export.codec) {
-                    Text("Same as video" + (export.sourceCodec.map { " (\($0.rawValue.uppercased()))" } ?? "")).tag(Codec?.none)
-                    ForEach(Codec.allCases, id: \.self) { Text($0.rawValue.uppercased()).tag(Codec?.some($0)) }
-                }
-                .fixedSize()
                 LabeledContent("Folder") {
                     HStack {
                         Text(export.destination?.path ?? "—").lineLimit(1).truncationMode(.middle)

@@ -16,6 +16,10 @@ final class ProjectDocument: NSDocument {
     private var transcriptStamp: FileStamp?
     private var watcher: DirectoryWatcher?
     private var asking = false
+    private var autosaveTimer: Timer?
+
+    /// Seconds after the first unsaved change before it is written to disk.
+    static let autosaveDelay: TimeInterval = 10
 
     override class var autosavesInPlace: Bool { false }
 
@@ -61,7 +65,72 @@ final class ProjectDocument: NSDocument {
         if saveOperation != .saveToOperation { startWatching(url) }
     }
 
+    // MARK: Autosave
+
+    /// Every change (each one comes through the undo manager) starts a 10-second timer
+    /// if none is running; when it fires, the project is saved. So while edits keep
+    /// coming it saves about every 10 s, and the last edit is on disk within 10 s.
+    override func updateChangeCount(_ change: NSDocument.ChangeType) {
+        super.updateChangeCount(change)
+        if isDocumentEdited, autosaveTimer == nil, fileURL != nil {
+            autosaveTimer = Timer.scheduledTimer(withTimeInterval: Self.autosaveDelay, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.autosaveNow() }
+            }
+        }
+    }
+
+    private func autosaveNow() {
+        autosaveTimer = nil
+        guard isDocumentEdited, let url = fileURL, let type = fileType, !asking else { return }
+        // Never overwrite edits made in a text editor: ask instead (as on window focus).
+        if FileStamp(Self.transcriptURL(url)) != transcriptStamp {
+            checkForExternalChange()
+            return
+        }
+        save(to: url, ofType: type, for: .saveOperation) { [weak self] error in
+            if let error {
+                MainActor.assumeIsolated { self?.model.flash("Autosave failed: \(error.localizedDescription)") }
+            }
+        }
+    }
+
+    /// Closing (or quitting, or opening another project) saves pending changes without
+    /// asking. Only when transcript.md was edited elsewhere since the last save does the
+    /// usual question appear, so neither version is overwritten silently.
+    override func canClose(withDelegate delegate: Any, shouldClose selector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
+        guard isDocumentEdited, let url = fileURL, let type = fileType,
+              FileStamp(Self.transcriptURL(url)) == transcriptStamp else {
+            return super.canClose(withDelegate: delegate, shouldClose: selector, contextInfo: contextInfo)
+        }
+        autosaveTimer?.invalidate()
+        autosaveTimer = nil
+        save(to: url, ofType: type, for: .saveOperation) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                // Couldn't save: fall back to the standard question rather than lose work.
+                self.presentError(error)
+                self.askBeforeClosing(delegate, selector, contextInfo)
+                return
+            }
+            Self.reply(to: delegate, selector, document: self, shouldClose: true, contextInfo)
+        }
+    }
+
+    private func askBeforeClosing(_ delegate: Any, _ selector: Selector?, _ contextInfo: UnsafeMutableRawPointer?) {
+        super.canClose(withDelegate: delegate, shouldClose: selector, contextInfo: contextInfo)
+    }
+
+    /// Calls the `document:shouldClose:contextInfo:` callback NSDocument's API expects.
+    private static func reply(to delegate: Any, _ selector: Selector?, document: NSDocument, shouldClose: Bool,
+                              _ contextInfo: UnsafeMutableRawPointer?) {
+        guard let selector, let target = delegate as? NSObject, let imp = target.method(for: selector) else { return }
+        typealias Callback = @convention(c) (NSObject, Selector, NSDocument, Bool, UnsafeMutableRawPointer?) -> Void
+        unsafeBitCast(imp, to: Callback.self)(target, selector, document, shouldClose, contextInfo)
+    }
+
     override func close() {
+        autosaveTimer?.invalidate()
+        autosaveTimer = nil
         watcher = nil
         MainActor.assumeIsolated { model.shutDown() }
         super.close()

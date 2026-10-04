@@ -89,18 +89,6 @@ struct ImportView: View {
                     Text("A project with this name exists and will be replaced.")
                         .font(.caption).foregroundStyle(.orange)
                 }
-                LabeledContent("Clip padding") {
-                    HStack(spacing: 6) {
-                        msField("before", $model.prePadMs)
-                        msField("after", $model.postPadMs)
-                        msField("crossfade", $model.crossfadeMs)
-                    }
-                }
-                Picker("Export codec", selection: $model.codec) {
-                    Text("Same as video").tag(Codec?.none)
-                    ForEach(Codec.allCases, id: \.self) { Text($0.rawValue.uppercased()).tag(Codec?.some($0)) }
-                }
-                .fixedSize()
             }
             .disabled(model.isRunning)
 
@@ -151,13 +139,6 @@ struct ImportView: View {
                 if let clear { Button("Clear", action: clear) }
                 Button("Choose…", action: action)
             }
-        }
-    }
-
-    private func msField(_ label: String, _ value: Binding<Int>) -> some View {
-        HStack(spacing: 2) {
-            TextField(label, value: value, format: .number).frame(width: 48).multilineTextAlignment(.trailing)
-            Text("ms \(label)").font(.caption).foregroundStyle(.secondary)
         }
     }
 }

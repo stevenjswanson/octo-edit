@@ -21,10 +21,6 @@ final class ImportModel {
     var video: URL? { didSet { if video != oldValue { videoChanged() } } }
     var zoom: URL?
     var destination: URL?
-    var prePadMs = Int((ProjectSettings().prePad * 1000).rounded())
-    var postPadMs = Int((ProjectSettings().postPad * 1000).rounded())
-    var crossfadeMs = Int((ProjectSettings().crossfade * 1000).rounded())
-    var codec: Codec?
     private(set) var phase: Phase = .editing
     private(set) var started: Date?
 
@@ -56,10 +52,9 @@ final class ImportModel {
         return vtts.first { $0.lastPathComponent.hasPrefix(key) } ?? (vtts.count == 1 ? vtts[0] : nil)
     }
 
-    var settings: ProjectSettings {
-        ProjectSettings(prePad: Double(prePadMs) / 1000, postPad: Double(postPadMs) / 1000,
-                        crossfade: Double(crossfadeMs) / 1000, codec: codec)
-    }
+    /// Defaults for now (pads, crossfade, codec same as the video); they're in the
+    /// project's front matter if a project ever needs different ones.
+    var settings: ProjectSettings { ProjectSettings() }
 
     // MARK: Running
 

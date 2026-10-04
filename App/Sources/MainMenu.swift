@@ -48,7 +48,7 @@ enum MainMenu {
 
     private static func fileMenu() -> NSMenu {
         let m = NSMenu(title: "File")
-        let importItem = item("Import Video…", #selector(AppDelegate.importVideo(_:)), "i", [.command, .shift])
+        let importItem = item("Import Video…", #selector(AppDelegate.importVideo(_:)), "i")
         importItem.target = NSApp.delegate
         m.addItem(importItem)
         m.addItem(item("Open…", #selector(NSDocumentController.openDocument(_:)), "o"))
@@ -62,7 +62,6 @@ enum MainMenu {
         m.addItem(item("Close", #selector(NSWindow.performClose(_:)), "w"))
         m.addItem(item("Save", #selector(NSDocument.save(_:)), "s"))
         m.addItem(item("Save As…", #selector(NSDocument.saveAs(_:)), "s", [.command, .shift]))
-        m.addItem(item("Revert to Saved", #selector(NSDocument.revertToSaved(_:))))
         m.addItem(.separator())
         m.addItem(item("Export Clips…", #selector(ProjectDocument.exportClips(_:)), "e", [.command, .shift]))
         return m
