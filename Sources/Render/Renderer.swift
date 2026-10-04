@@ -32,7 +32,8 @@ public struct Renderer {
         self.info = try await SourceInfo.read(source)
     }
 
-    /// Renders one clip to `<directory>/<slug>.mp4` plus, for full renders, `<slug>.vtt`.
+    /// Renders one clip to `<directory>/<slug>.mp4` plus `<slug>.vtt`, or for previews
+    /// to `<directory>/<slug>.preview.mp4`.
     public func render(_ clip: Clip, into directory: URL, options: Options,
                        progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Rendered {
         let slug = project.slug(of: clip.id)!
@@ -41,7 +42,7 @@ public struct Renderer {
         let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
                                                        crossfade: project.settings.crossfade)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = directory.appendingPathComponent(slug).appendingPathExtension("mp4")
+        let file = directory.appendingPathComponent(slug + (options.preview ? ".preview.mp4" : ".mp4"))
         let quality: ClipExporter.Quality = options.preview ? .preview : .full(options.codec ?? project.settings.codec ?? info.codec)
         try await ClipExporter.export(built, info: info, quality: quality, to: file, progress: progress)
         if !options.preview {

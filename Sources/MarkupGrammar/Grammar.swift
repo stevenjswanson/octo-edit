@@ -15,7 +15,6 @@ public enum PackageLayout {
 }
 
 public enum Grammar {
-    public static let wrapWidth = 72
     public static let frontMatterFence = "---"
     public static let fence = "~~"
     public static let zoomPrefix = "> "

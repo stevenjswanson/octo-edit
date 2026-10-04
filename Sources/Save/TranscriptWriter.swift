@@ -87,11 +87,8 @@ public enum TranscriptWriter {
         }
     }
 
-    struct Unit {
-        var text: String
-        var ownLine = false
-    }
-
+    /// Each paragraph is written as a single line: no wrapping, so an edit never
+    /// re-flows its neighbours and every `~~…~~` stays on one line.
     static func body(_ p: Project) -> [String] {
         let marks = Marks(p)
         let slugs = p.slugs()
@@ -106,27 +103,26 @@ public enum TranscriptWriter {
             out.append("")
             if para.zoomOnly {
                 out.append(Grammar.zoomHeaderLine(time: para.zoomStart ?? 0, speaker: para.speaker))
-                let text = p.words[i..<j].map(\.text)
-                out += wrap(text.map { Unit(text: $0) }, width: Grammar.wrapWidth - Grammar.zoomPrefix.count)
-                    .map { Grammar.zoomPrefix + $0 }
+                out.append(Grammar.zoomPrefix + p.words[i..<j].map(\.text).joined(separator: " "))
             } else {
                 if let t = p.words[i..<j].first(where: { $0.isTimed })?.start { lastTime = t }
                 out.append(Grammar.paragraphHeaderLine(time: lastTime, speaker: para.speaker))
-                out += wrap(units(p, i..<j, marks, slugs), width: Grammar.wrapWidth)
+                out.append(units(p, i..<j, marks, slugs).joined(separator: " "))
             }
             i = j
         }
         return out
     }
 
-    static func units(_ p: Project, _ range: Range<Int>, _ m: Marks, _ slugs: [ClipID: String]) -> [Unit] {
-        var units: [Unit] = []
+    /// Words with their markers attached, and omitted runs as single `~~…~~` units.
+    static func units(_ p: Project, _ range: Range<Int>, _ m: Marks, _ slugs: [ClipID: String]) -> [String] {
+        var units: [String] = []
         var i = range.lowerBound
         while i < range.upperBound {
             if m.omitted.contains(i) {
                 var j = i
                 while j < range.upperBound, m.omitted.contains(j) { j += 1 }
-                units += omitChunks(p, i..<j, m)
+                units.append(omitted(p, i..<j, m))
                 i = j
                 continue
             }
@@ -139,55 +135,20 @@ public enum TranscriptWriter {
             if let clip = m.close[i] {
                 text += " " + Grammar.clipClose(offset: clip.segments.last?.outPoint.offset)
             }
-            units.append(Unit(text: text))
+            units.append(text)
             i += 1
         }
         return units
     }
 
-    /// An omitted run as one inline `~~…~~` unit if it fits on a line, otherwise
-    /// several fenced chunks, each on its own line (Markdown can't strike across lines).
-    static func omitChunks(_ p: Project, _ range: Range<Int>, _ m: Marks) -> [Unit] {
-        let openOffset = m.omitOpenOffset[range.lowerBound]
-        let closeOffset = m.omitCloseOffset[range.upperBound - 1]
-        func render(_ r: Range<Int>) -> String {
-            var parts: [String] = []
-            if r.lowerBound == range.lowerBound, let o = openOffset { parts.append(Grammar.offsetMarker(o)) }
-            parts += p.words[r].map(\.text)
-            if r.upperBound == range.upperBound, let o = closeOffset { parts.append(Grammar.offsetMarker(o)) }
-            return Grammar.fence + parts.joined(separator: " ") + Grammar.fence
-        }
-        let whole = render(range)
-        if whole.count <= Grammar.wrapWidth { return [Unit(text: whole)] }
-        var chunks: [Unit] = []
-        var start = range.lowerBound
-        while start < range.upperBound {
-            var end = start + 1
-            while end < range.upperBound, render(start..<(end + 1)).count <= Grammar.wrapWidth { end += 1 }
-            chunks.append(Unit(text: render(start..<end), ownLine: true))
-            start = end
-        }
-        return chunks
-    }
-
-    static func wrap(_ units: [Unit], width: Int) -> [String] {
-        var lines: [String] = []
-        var current = ""
-        for u in units {
-            if u.ownLine {
-                if !current.isEmpty { lines.append(current); current = "" }
-                lines.append(u.text)
-            } else if current.isEmpty {
-                current = u.text
-            } else if current.count + 1 + u.text.count <= width {
-                current += " " + u.text
-            } else {
-                lines.append(current)
-                current = u.text
-            }
-        }
-        if !current.isEmpty { lines.append(current) }
-        return lines
+    /// `~~{+40ms} words {-60ms}~~`; offsets only where set explicitly. An omission that
+    /// crosses a paragraph break is fenced separately in each paragraph (the reader merges them).
+    static func omitted(_ p: Project, _ range: Range<Int>, _ m: Marks) -> String {
+        var parts: [String] = []
+        if let o = m.omitOpenOffset[range.lowerBound] { parts.append(Grammar.offsetMarker(o)) }
+        parts += p.words[range].map(\.text)
+        if let o = m.omitCloseOffset[range.upperBound - 1] { parts.append(Grammar.offsetMarker(o)) }
+        return Grammar.fence + parts.joined(separator: " ") + Grammar.fence
     }
 
     // MARK: Notes

@@ -125,7 +125,7 @@ func samples(_ url: URL) async throws -> [Float] {
         let r = try await Renderer(project: p, source: src)
         #expect(r.info.width == 3840 && r.info.codec == .hevc)
         let out = try await r.render(p.clip(c)!, into: dir, options: .init(preview: true))
-        #expect(out.file.lastPathComponent == "tone-test.mp4")
+        #expect(out.file.lastPathComponent == "tone-test.preview.mp4")
         let v = try await AVURLAsset(url: out.file).loadTracks(withMediaType: .video)[0]
         let (size, formats) = try await (v.load(.naturalSize), v.load(.formatDescriptions))
         #expect(size == CGSize(width: 1280, height: 720))

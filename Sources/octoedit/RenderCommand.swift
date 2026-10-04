@@ -12,7 +12,7 @@ struct RenderCommand: AsyncParsableCommand {
         Each clip becomes <slug>.mp4 (same resolution and frame rate as the input,
         hardware-encoded) with <slug>.vtt captions; notes.md lists what was exported.
         Use --check to validate transcript.md without rendering, and --preview for fast
-        720p versions in exports/preview/.
+        720p <slug>.preview.mp4 versions in exports/preview/.
         """
     )
 
@@ -22,7 +22,7 @@ struct RenderCommand: AsyncParsableCommand {
     @Flag(help: "Only validate transcript.md and list the clips.")
     var check = false
 
-    @Flag(help: "Fast 720p H.264 versions in exports/preview/ (no captions).")
+    @Flag(help: "Fast 720p H.264 <slug>.preview.mp4 files in exports/preview/ (no captions).")
     var preview = false
 
     @Option(help: "Output codec (default: the project's, else same as the input).")

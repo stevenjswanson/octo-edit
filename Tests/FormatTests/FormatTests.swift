@@ -110,13 +110,11 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         #expect(out.contains("November. {/clip +180ms}"))
         #expect(out.contains("{clip \"Hiring plan\"}[^hiring-plan] Turning"))
         #expect(out.hasSuffix("[^hiring-plan]: Hold until searches are approved. Pairs with the budget clip.\n"))
-        let body = out.components(separatedBy: "\n---\n")[1]   // front matter lines are not wrapped
-        for line in body.split(separator: "\n") where !line.hasPrefix("[^") {
-            #expect(line.count <= Grammar.wrapWidth, "line too long: \(line)")
-        }
+        // One line per paragraph: header, then the whole paragraph.
+        #expect(out.contains("[00:00:00.0] **Steve Swanson:**\nWelcome everyone. {clip \"Welcome\" -200ms} Thanks for making time on a Wednesday. Today we have three items: the budget, the hiring plan, and the new building. {/clip}\n\n"))
     }
 
-    @Test func longOmitIsChunkedOneFencePerLine() throws {
+    @Test func longOmitStaysOnOneLineWithItsOffsets() throws {
         var p = parse(handWritten).project
         let c = p.clips[0].id
         let a = word(p, "Thanks"), b = word(p, "new")
@@ -124,14 +122,22 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         try p.setOffset(clip: c, segment: 0, inPoint: false, 0.05)
         try p.setOffset(clip: c, segment: 1, inPoint: true, -0.07)
         let out = TranscriptWriter.write(p)
-        let lines = out.split(separator: "\n")
-        let first = lines.firstIndex { $0.hasPrefix("~~{+50ms}") }!
-        let last = lines.firstIndex { $0.hasSuffix("{-70ms}~~") }!
-        let chunks = lines[first...last]
-        #expect(chunks.count >= 2)
-        #expect(chunks.allSatisfy { $0.hasPrefix("~~") && $0.hasSuffix("~~") && $0.count <= Grammar.wrapWidth })
+        #expect(out.contains("Thanks ~~{+50ms} for making time on a Wednesday. Today we have three items: the budget, the hiring plan, and the new {-70ms}~~ building. {/clip}"))
         let back = TranscriptReader.parse(out, timedWords: timedWords(for: handWritten)).project
         #expect(back.clips[0].segments == p.clips[0].segments)
+    }
+
+    @Test func omitAcrossParagraphsIsFencedInEach() throws {
+        var p = parse(handWritten).project
+        let c = p.clips[1].id
+        let a = word(p, "options."), b = word(p, "one?")
+        try p.omit(words: a...b, in: c)
+        try p.setOffset(clip: c, segment: 1, inPoint: false, 0.03)
+        let out = TranscriptWriter.write(p)
+        #expect(out.contains("We have three ~~{+30ms} options.~~\n"))
+        #expect(out.contains("\n~~Can you say more about the second one?~~\n"))
+        let back = TranscriptReader.parse(out, timedWords: timedWords(for: handWritten)).project
+        #expect(back.clips[1].segments == p.clips[1].segments)
     }
 }
 

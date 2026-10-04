@@ -18,16 +18,14 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | Command | What it does |
 |---|---|
 | `init --video V [--zoom Z] [--pre 120ms --post 180ms --crossfade 20ms] [--codec hevc\|h264] PKG` | Transcribes V on this Mac (English, first audio track), tightens word edges against the audio, takes speakers and text from the Zoom `.vtt`, and writes an un-annotated `transcript.md`. |
-| `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--dest DIR]` | Exports each clip as `SLUG.mp4` (input resolution and frame rate, hardware-encoded) plus `SLUG.vtt` captions and a `notes.md`. `--check` only validates; `--preview` makes fast 720p versions in `exports/preview/`. |
+| `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--dest DIR]` | Exports each clip as `SLUG.mp4` (input resolution and frame rate, hardware-encoded) plus `SLUG.vtt` captions and a `notes.md`. `--check` only validates; `--preview` makes fast 720p `SLUG.preview.mp4` files in `exports/preview/`. |
 | `name PKG [--clip SLUG]… [--apply [--all]]` | Suggests titles with Apple's on-device model into the front matter. `--apply` names unnamed clips; `--all` renames every clip. |
 
 ## Marking up `transcript.md`
 
 ```markdown
 [00:23:46.3] **Steve Swanson:**
-{clip "Budget update" -120ms} For FY27 the campus allocation is
-~~{+40ms} um, let me find the, uh, {-60ms}~~ flat in nominal terms.
-We have three options. {/clip +250ms}
+{clip "Budget update" -120ms} For FY27 the campus allocation is ~~{+40ms} um, let me find the, uh, {-60ms}~~ flat in nominal terms. We have three options. {/clip +250ms}
 
 {clip}[^clip-02] An unnamed clip; `octoedit name --apply` will name it. {/clip}
 
@@ -39,16 +37,17 @@ We have three options. {/clip +250ms}
 |---|---|
 | `{clip "Name"}` … `{/clip}` | A clip. The name is optional; the output file is the name's slug (`budget-update`), or `clip-NN` when unnamed. |
 | `{clip … -120ms}`, `{/clip +250ms}` | Start 120 ms before the first word; end 250 ms after the last. Without an offset, the `pre`/`post` defaults apply. |
-| `~~words~~` | Omitted from the clip (a hard cut with a short audio crossfade). Keep each `~~…~~` on one line; consecutive omitted lines merge. |
-| `~~{+40ms} …` / `… {-60ms}~~` | Fine-tune the cut: keep 40 ms after the word before the omission; resume 60 ms before the word after it. Default 0. |
+| `~~words~~` | Omitted from the clip (a hard cut with a short audio crossfade). Omitted text that continues into the next paragraph is fenced again there; the pieces merge. |
+| `~~{+40ms} …` / `… {-60ms}~~` | Adjust the cut at an omission: `{+40ms}` just inside the opening `~~` keeps 40 ms after the word before it; `{-60ms}` just inside the closing `~~` resumes 60 ms before the word after it. Default 0 (word edges are already tightened to the speech). |
 | `[^slug]: text` | Notes for the clip with that slug. |
 | `> (00:00:02.1) **Speaker:**` | Zoom-only text (said before or after the recording); can't contain markers. |
 
 Edit the words freely: timing is re-attached on every load by aligning the text with
 `words.tsv`, so fixing a misheard word keeps its timing and deleting one shifts nothing.
 Words you type that were never spoken have no timing and are ignored for cutting.
-Saving from the tool (`name`) rewrites the file in canonical form; after the first time,
-diffs stay minimal.
+The tool writes each paragraph on a single line (turn on soft wrap in your editor). Saving
+from the tool (`name`) rewrites the file in that canonical form; after the first time, diffs
+stay minimal.
 
 ## Package layout
 
