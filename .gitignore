@@ -6,3 +6,4 @@ DerivedData/
 Fixtures/generated/
 *.octoedit/cache/
 *.octoedit/exports/
+Fixtures/real/
