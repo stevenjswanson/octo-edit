@@ -59,14 +59,14 @@ public struct Ingest: Sendable {
         return Result(project: project, words: timed, envelope: envelope)
     }
 
-    /// Paragraphs from Zoom cues: a new paragraph when the speaker changes, after a
-    /// long pause, or when a paragraph gets long. Zoom-only cues become `>` paragraphs
+    /// Paragraphs from Zoom cues: one paragraph per cue (Zoom transcripts may name only
+    /// one speaker for the whole meeting, so speaker changes can't be relied on), split
+    /// further only by a long pause inside a cue. Zoom-only cues become `>` paragraphs
     /// placed by time.
     func build(_ p: inout Project, merged: ZoomMerge.Output, cues: [Cue]) {
         var paragraphs: [Paragraph] = []
         var words: [Word] = []
         var zoomOnly = merged.zoomOnly[...]
-        var countInParagraph = 0
 
         func emitZoomOnly(before t: Seconds?) {
             while let c = zoomOnly.first, t == nil || c.start - merged.offset <= t! {
@@ -76,25 +76,22 @@ public struct Ingest: Sendable {
                 for t in c.text.split(whereSeparator: \.isWhitespace) {
                     words.append(Word(id: WordID(words.count + 1), text: String(t), paragraph: id))
                 }
-                countInParagraph = Int.max   // force a fresh paragraph after it
             }
         }
 
+        var lastCue: Int?
         for mw in merged.words {
             emitZoomOnly(before: mw.word.start)
             let cue = mw.cue.map { cues[$0] }
             let prev = words.last
-            let speakerChanged = paragraphs.last.map { $0.zoomOnly || $0.speaker != cue?.speaker } ?? true
+            let newCue = paragraphs.last.map { $0.zoomOnly || mw.cue != lastCue } ?? true
             let pause = (prev?.end).map { mw.word.start - $0 } ?? 0
-            let sentenceEnded = prev.map { [".", "?", "!"].contains($0.text.last ?? " ") } ?? false
-            if paragraphs.isEmpty || speakerChanged || pause >= longPause || (pause >= paragraphPause && sentenceEnded)
-                || (countInParagraph >= maxParagraphWords && sentenceEnded) {
+            lastCue = mw.cue
+            if paragraphs.isEmpty || newCue || pause >= longPause {
                 paragraphs.append(Paragraph(id: ParagraphID(paragraphs.count + 1), speaker: cue?.speaker, zoomCue: cue?.index))
-                countInParagraph = 0
             }
             words.append(Word(id: WordID(words.count + 1), text: mw.word.text, start: mw.word.start, end: mw.word.end,
                               confidence: mw.word.confidence, paragraph: paragraphs.last!.id))
-            countInParagraph += 1
         }
         emitZoomOnly(before: nil)
         p.paragraphs = paragraphs

@@ -81,6 +81,33 @@ import Transcribe
     }
 }
 
+@Suite struct ParagraphTests {
+    struct NoTranscriber: Transcriber {
+        func transcribe(audio: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> [TimedWord] { [] }
+    }
+    struct NoAnalyzer: EnvelopeAnalyzer {
+        func envelope(of media: URL) async throws -> Envelope { Envelope(bucketsPerSecond: 200, rms: []) }
+    }
+
+    /// Zoom transcripts that credit one speaker for everything must still give one paragraph per cue.
+    @Test func singleSpeakerTranscriptSplitsByCue() {
+        let cues = (0..<4).map { Cue(index: $0 + 1, start: Double($0) * 3, end: Double($0) * 3 + 2.5, speaker: "Host",
+                                     text: "line \($0) of the meeting") }
+        // Back-to-back speech: no pauses to split on.
+        let asr = cues.flatMap { c in
+            c.text.split(separator: " ").enumerated().map { k, w in
+                TimedWord(text: String(w), start: c.start + Double(k) * 0.5, end: c.start + Double(k) * 0.5 + 0.5)
+            }
+        }
+        var p = Project(source: "x.mp4")
+        Ingest(transcriber: NoTranscriber(), analyzer: NoAnalyzer())
+            .build(&p, merged: ZoomMerge.merge(asr: asr, cues: cues), cues: cues)
+        #expect(p.paragraphs.count == 4)
+        #expect(p.paragraphs.map(\.zoomCue) == [1, 2, 3, 4])
+        #expect(p.paragraphs.allSatisfy { $0.speaker == "Host" })
+    }
+}
+
 // MARK: - Integration on the generated fixture
 
 let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
