@@ -150,3 +150,41 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(p.validate().contains { $0.severity == .warning && $0.message.contains("intro") })
     }
 }
+
+@Suite struct ZoomOnlyAndSplitTests {
+    /// Words 0–2 are a Zoom-only paragraph, 3–9 spoken.
+    func project() -> Project {
+        var p = sampleProject()
+        p.paragraphs.insert(Paragraph(id: ParagraphID(9), speaker: "Z", zoomOnly: true, zoomStart: 0), at: 0)
+        for i in 0..<3 { p.words[i].paragraph = ParagraphID(9); p.words[i].start = nil; p.words[i].end = nil }
+        return p
+    }
+
+    @Test func boundariesCannotLandInZoomOnlyText() throws {
+        var p = project()
+        #expect(throws: EditError.zoomOnlyText) { try p.makeClip(words: 1...5) }
+        let c = try p.makeClip(words: 3...6)
+        #expect(throws: EditError.zoomOnlyText) { try p.extendClip(c, toInclude: 2...2) }
+        #expect(throws: EditError.zoomOnlyText) { try p.moveBoundary(clip: c, segment: 0, inPoint: true, to: 0) }
+        #expect(p.indexRange(of: p.clip(c)!) == 3...6)   // unchanged after failed edits
+        #expect(p.validate().allSatisfy { $0.severity != .error })
+    }
+
+    @Test func validateFlagsHandBuiltViolations() {
+        var p = project()
+        p.clips = [Clip(id: ClipID(1), segments: [Segment(inPoint: Boundary(word: p.words[2].id), outPoint: Boundary(word: p.words[5].id))])]
+        #expect(p.validate().contains { $0.severity == .error && $0.message.contains("Zoom-only") })
+    }
+
+    @Test func splitParagraph() throws {
+        var p = project()
+        let id = try p.splitParagraph(atWord: 6)
+        #expect(p.paragraphs.map(\.id) == [ParagraphID(9), ParagraphID(1), id])
+        #expect(p.words[5].paragraph == ParagraphID(1) && p.words[6].paragraph == id && p.words[9].paragraph == id)
+        #expect(p.paragraph(id)?.speaker == "A")
+        #expect(throws: EditError.notSplittable) { try p.splitParagraph(atWord: 6) }   // already first word
+        #expect(throws: EditError.notSplittable) { try p.splitParagraph(atWord: 1) }   // Zoom-only
+        p.mergeWithPrevious(paragraph: id)
+        #expect(p.paragraphs.count == 2)
+    }
+}

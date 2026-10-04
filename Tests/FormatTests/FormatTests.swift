@@ -230,6 +230,17 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         #expect(back.clips[2].suggestions == ["Two searches"])
     }
 
+    @Test func splitParagraphRoundTrips() throws {
+        var p = parse(handWritten).project
+        let before = p.paragraphs.count
+        try p.splitParagraph(atWord: word(p, "Today"))
+        let out = TranscriptWriter.write(p)
+        #expect(out.contains("Wednesday.\n\n[00:00:04.5] **Steve Swanson:**\nToday we have"))
+        let back = TranscriptReader.parse(out, timedWords: timedWords(for: handWritten)).project
+        #expect(back.paragraphs.count == before + 1)
+        #expect(back.clips == p.clips)   // the Welcome clip now spans two paragraphs
+    }
+
     @Test func multiLineNotesRoundTrip() throws {
         var p = parse(handWritten).project
         try p.setNotes(clip: p.clips[0].id, "First line.\n\nSecond paragraph.")

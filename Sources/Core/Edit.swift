@@ -6,6 +6,8 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
     case noSuchClip(ClipID)
     case outsideClip
     case wouldOmitEverything
+    case zoomOnlyText
+    case notSplittable
 
     public var description: String {
         switch self {
@@ -14,6 +16,8 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
         case .noSuchClip(let id): "no clip \(id)"
         case .outsideClip: "the range is not inside the clip"
         case .wouldOmitEverything: "omitting this would leave the clip empty"
+        case .zoomOnlyText: "clip boundaries and omissions can't be placed in Zoom-only text (it isn't in the recording)"
+        case .notSplittable: "the paragraph can't be split there"
         }
     }
 }
@@ -21,6 +25,23 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
 extension Project {
     private func checkRange(_ r: ClosedRange<Int>) throws {
         guard r.lowerBound >= 0, r.upperBound < words.count else { throw EditError.invalidRange }
+    }
+
+    /// Whether word `i` belongs to a Zoom-only paragraph (text not in the recording).
+    public func isZoomOnly(wordAt i: Int) -> Bool {
+        paragraph(words[i].paragraph)?.zoomOnly ?? false
+    }
+
+    /// Clip edges, cut points and omitted words must all be in spoken text: the
+    /// format can't put markers in a Zoom-only paragraph, and nothing there has timing.
+    private func checkPlaceable(_ segments: [Segment]) throws {
+        let ranges = segments.compactMap { indexRange(of: $0) }
+        for r in ranges where isZoomOnly(wordAt: r.lowerBound) || isZoomOnly(wordAt: r.upperBound) {
+            throw EditError.zoomOnlyText
+        }
+        for (a, b) in zip(ranges, ranges.dropFirst()) where a.upperBound + 1 < b.lowerBound {
+            if ((a.upperBound + 1)..<b.lowerBound).contains(where: { isZoomOnly(wordAt: $0) }) { throw EditError.zoomOnlyText }
+        }
     }
 
     private func clipIndex(_ id: ClipID) throws -> Int {
@@ -74,6 +95,7 @@ extension Project {
         let clip = Clip(id: id, name: name, segments: [
             Segment(inPoint: Boundary(word: words[r.lowerBound].id), outPoint: Boundary(word: words[r.upperBound].id)),
         ])
+        try checkPlaceable(clip.segments)
         let insertAt = clips.firstIndex { (indexRange(of: $0)?.lowerBound ?? .max) > r.upperBound } ?? clips.count
         clips.insert(clip, at: insertAt)
         return id
@@ -93,7 +115,9 @@ extension Project {
         var kept = keptMask(clips[ci], over: range)
         for i in r { kept[i - range.lowerBound] = false }
         guard kept.contains(true) else { throw EditError.wouldOmitEverything }
-        clips[ci].segments = rebuiltSegments(clips[ci], range: range, kept: kept)
+        let segments = rebuiltSegments(clips[ci], range: range, kept: kept)
+        try checkPlaceable(segments)
+        clips[ci].segments = segments
     }
 
     /// Restores previously omitted words inside a clip.
@@ -105,7 +129,9 @@ extension Project {
         }
         var kept = keptMask(clips[ci], over: range)
         for i in r { kept[i - range.lowerBound] = true }
-        clips[ci].segments = rebuiltSegments(clips[ci], range: range, kept: kept)
+        let segments = rebuiltSegments(clips[ci], range: range, kept: kept)
+        try checkPlaceable(segments)
+        clips[ci].segments = segments
     }
 
     /// Grows (or shrinks) a clip so it spans exactly `r` plus its current extent if
@@ -123,10 +149,12 @@ extension Project {
         for i in range { kept[i - newRange.lowerBound] = old[i - range.lowerBound] }
         let firstOffset = clips[ci].segments.first?.inPoint.offset
         let lastOffset = clips[ci].segments.last?.outPoint.offset
-        clips[ci].segments = rebuiltSegments(clips[ci], range: newRange, kept: kept)
+        var segments = rebuiltSegments(clips[ci], range: newRange, kept: kept)
         // The clip's outer offsets follow the clip edges.
-        clips[ci].segments[0].inPoint.offset = firstOffset
-        clips[ci].segments[clips[ci].segments.count - 1].outPoint.offset = lastOffset
+        segments[0].inPoint.offset = firstOffset
+        segments[segments.count - 1].outPoint.offset = lastOffset
+        try checkPlaceable(segments)
+        clips[ci].segments = segments
     }
 
     /// Moves a segment's in- or out-point to another word inside the same clip span.
@@ -144,6 +172,7 @@ extension Project {
            let other = clips.first(where: { $0.id != id && (indexRange(of: $0)?.overlaps(r) ?? false) }) {
             throw EditError.overlapsClip(other.id)
         }
+        try checkPlaceable(segs)
         clips[ci].segments = segs
     }
 
@@ -169,6 +198,24 @@ extension Project {
     public mutating func setSpeaker(paragraph id: ParagraphID, _ speaker: String?) {
         guard let i = paragraphs.firstIndex(where: { $0.id == id }) else { return }
         paragraphs[i].speaker = speaker
+    }
+
+    /// Splits a paragraph so that word `i` starts a new one (same speaker), inserted
+    /// right after it. Zoom-only paragraphs can't be split. Returns the new paragraph.
+    @discardableResult
+    public mutating func splitParagraph(atWord i: Int) throws -> ParagraphID {
+        guard words.indices.contains(i), i > 0, words[i - 1].paragraph == words[i].paragraph,
+              let pi = paragraphs.firstIndex(where: { $0.id == words[i].paragraph }),
+              !paragraphs[pi].zoomOnly else { throw EditError.notSplittable }
+        let old = paragraphs[pi]
+        let id = ParagraphID((paragraphs.map(\.id.raw).max() ?? 0) + 1)
+        paragraphs.insert(Paragraph(id: id, speaker: old.speaker, zoomCue: old.zoomCue), at: pi + 1)
+        var j = i
+        while j < words.count, words[j].paragraph == old.id {
+            words[j].paragraph = id
+            j += 1
+        }
+        return id
     }
 
     /// Merges a paragraph into the one before it (its words move; the earlier speaker wins).

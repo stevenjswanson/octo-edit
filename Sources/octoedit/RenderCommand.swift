@@ -71,17 +71,36 @@ struct RenderCommand: AsyncParsableCommand {
         let renderer = try await Renderer(project: p, source: loaded.sourceURL)
         let outDir = dest.map(URL.init(cliPath:)) ?? pkg.appendingPathComponent(preview ? "exports/preview" : "exports")
         let options = Renderer.Options(codec: codec, preview: preview)
-        var done: [Renderer.Rendered] = []
-        for (n, clip) in selected.enumerated() {
-            let label = "[\(n + 1)/\(selected.count)] \(slugs[clip.id]!)"
-            let r = try await renderer.render(clip, into: outDir, options: options) { Console.progress(label, $0) }
-            done.append(r)
-            print(r.file.path)
+        let preview = preview
+
+        let work = Task { () -> [Renderer.Rendered] in
+            var done: [Renderer.Rendered] = []
+            for (n, clip) in selected.enumerated() {
+                let label = "[\(n + 1)/\(selected.count)] \(slugs[clip.id]!)"
+                let r = try await renderer.render(clip, into: outDir, options: options) { Console.progress(label, $0) }
+                done.append(r)
+                print(r.file.path)
+            }
+            if !preview {
+                let notes = outDir.appendingPathComponent("notes.md")
+                try renderer.notesFile(for: done).write(to: notes, atomically: true, encoding: .utf8)
+            }
+            return done
         }
-        if !preview {
-            let notes = outDir.appendingPathComponent("notes.md")
-            try renderer.notesFile(for: done).write(to: notes, atomically: true, encoding: .utf8)
+        // Ctrl-C cancels cleanly: the clip being encoded is abandoned and its partial
+        // file removed; clips already finished stay.
+        signal(SIGINT, SIG_IGN)
+        let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+        interrupt.setEventHandler { work.cancel() }
+        interrupt.resume()
+        defer { interrupt.cancel(); signal(SIGINT, SIG_DFL) }
+
+        do {
+            let done = try await work.value
+            Console.note("Exported \(done.count) clip\(done.count == 1 ? "" : "s") to \(outDir.path)")
+        } catch is CancellationError {
+            Console.note("Cancelled. Clips that finished are in \(outDir.path); nothing partial was left behind.")
+            throw ExitCode(130)
         }
-        Console.note("Exported \(done.count) clip\(done.count == 1 ? "" : "s") to \(outDir.path)")
     }
 }

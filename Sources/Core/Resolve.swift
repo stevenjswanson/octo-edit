@@ -121,6 +121,12 @@ extension Project {
                 }
                 last = r.upperBound
             }
+            let ranges = clip.segments.compactMap { indexRange(of: $0) }
+            let edges = ranges.flatMap { [$0.lowerBound, $0.upperBound] }
+            let gaps = zip(ranges, ranges.dropFirst()).flatMap { a, b in Array((a.upperBound + 1)..<max(b.lowerBound, a.upperBound + 1)) }
+            if (edges + gaps).contains(where: { paragraph(words[$0].paragraph)?.zoomOnly ?? false }) {
+                issues.append(Issue(.error, "\(label) has a boundary or omission in Zoom-only text"))
+            }
             if resolvedSegments(of: clip).isEmpty {
                 issues.append(Issue(.warning, "\(label) has no timed words and will produce no video"))
             }

@@ -37,6 +37,8 @@ public enum ClipExporter {
         }
     }
 
+    /// Exports `built` to `url`. Throws `CancellationError` (leaving no file behind)
+    /// if the calling task is cancelled.
     public static func export(_ built: CompositionBuilder.Output, info: SourceInfo, quality: Quality, to url: URL,
                               progress: @escaping @Sendable (Double) -> Void) async throws {
         guard let session = AVAssetExportSession(asset: built.composition, presetName: preset(for: info, quality: quality)) else {
@@ -59,10 +61,20 @@ public enum ClipExporter {
             }
         }
         defer { watcher.cancel() }
+        // Cancelling the calling task stops the encoder and removes the partial file.
+        // cancelExport() may be called from any thread.
+        nonisolated(unsafe) let cancellable = session
         do {
-            try await session.export(to: partial, as: .mp4)
+            try Task.checkCancellation()
+            try await withTaskCancellationHandler {
+                try await session.export(to: partial, as: .mp4)
+            } onCancel: {
+                cancellable.cancelExport()
+            }
+            try Task.checkCancellation()
         } catch {
             try? fm.removeItem(at: partial)
+            if Task.isCancelled || error is CancellationError { throw CancellationError() }
             throw RenderError.exportFailed(error.localizedDescription)
         }
         if fm.fileExists(atPath: url.path) {

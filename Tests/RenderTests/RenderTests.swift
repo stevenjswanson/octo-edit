@@ -133,6 +133,22 @@ func samples(_ url: URL) async throws -> [Float] {
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("tone-test.vtt").path))
     }
 
+    @Test(.enabled(if: haveTone)) func cancellingLeavesNoFiles() async throws {
+        let src = fixture("tone-4k.mp4")
+        var p = secondsProject(source: src.path)
+        let c = try p.makeClip(words: 0...9, name: "Long")
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let r = try await Renderer(project: p, source: src)
+        let clip = p.clip(c)!
+        let task = Task { try await r.render(clip, into: dir, options: .init()) }
+        try await Task.sleep(for: .milliseconds(700))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        let left = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        #expect(left.isEmpty, "left behind: \(left)")
+    }
+
     @Test(.enabled(if: haveTone)) func notesFileListsClipsWithFootnotes() async throws {
         var p = secondsProject(source: fixture("tone-4k.mp4").path)
         let a = try p.makeClip(words: 0...1, name: "First")
