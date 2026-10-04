@@ -49,6 +49,10 @@ public struct AssetEnvelopeAnalyzer: EnvelopeAnalyzer {
         var count = 0
         var samples: [Float] = []
         while let buffer = output.copyNextSampleBuffer() {
+            if Task.isCancelled {
+                reader.cancelReading()
+                throw CancellationError()
+            }
             guard let block = CMSampleBufferGetDataBuffer(buffer) else { continue }
             let length = CMBlockBufferGetDataLength(block)
             let n = length / MemoryLayout<Float>.size

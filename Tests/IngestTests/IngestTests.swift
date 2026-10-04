@@ -184,3 +184,35 @@ func edgeError(_ words: [(start: Double, end: Double)], _ lines: [TruthLine]) ->
         #expect(text.contains("um,"))
     }
 }
+
+@Suite(.serialized, .enabled(if: haveFixture)) struct IngestCancellationTests {
+    final class Clock: @unchecked Sendable {
+        let lock = NSLock()
+        var cancelledAt: Date?
+    }
+
+    /// Cancelling mid-transcription stops the run promptly with CancellationError.
+    @Test func cancelDuringTranscription() async throws {
+        let video = fixtures.appendingPathComponent("meeting-1080.mp4")
+        let clock = Clock()
+        let task = Task {
+            try await Ingest(transcriber: AppleSpeechTranscriber(), analyzer: AssetEnvelopeAnalyzer())
+                .run(video: video, zoom: nil, settings: ProjectSettings()) { stage, fraction in
+                    guard stage == .transcribing, fraction > 0 else { return }
+                    clock.lock.lock(); defer { clock.lock.unlock() }
+                    if clock.cancelledAt == nil { clock.cancelledAt = Date() }
+                }
+        }
+        // Cancel as soon as transcription reports progress.
+        while clock.lock.withLock({ clock.cancelledAt }) == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        task.cancel()
+        let result = await task.result
+        let stopped = Date()
+        guard case .failure(let error) = result else { Issue.record("ingest finished despite cancellation"); return }
+        #expect(error is CancellationError)
+        let lag = stopped.timeIntervalSince(clock.lock.withLock { clock.cancelledAt! })
+        #expect(lag < 2, "took \(lag) s to stop")
+    }
+}

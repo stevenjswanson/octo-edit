@@ -265,6 +265,15 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
 }
 
 @Suite struct EncodingTests {
+    /// A start time straight from ingest and the same time read back from words.tsv
+    /// (millisecond precision) must give the same paragraph header.
+    @Test func headerTimestampIsStableAcrossWordsTSV() {
+        #expect(Grammar.timestamp(439.79996) == "00:07:19.8")
+        #expect(Grammar.timestamp(439.800) == "00:07:19.8")
+        #expect(Grammar.timestamp(439.7994) == "00:07:19.7")
+        #expect(Grammar.timestamp(3600.05) == "01:00:00.0")
+    }
+
     @Test func wordsTSVRoundTrip() throws {
         let w = [TimedWord(text: "Hello,", start: 0.12, end: 0.5, confidence: 0.93),
                  TimedWord(text: "world.", start: 0.5, end: 1.25, confidence: nil)]

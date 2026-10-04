@@ -23,8 +23,10 @@ public enum Grammar {
     // MARK: Times and offsets
 
     /// `hh:mm:ss.d` (tenths, truncated so a header never claims a time after its first word).
+    /// Rounded to whole milliseconds first — the precision words.tsv keeps — so a time
+    /// straight from ingest (439.79996) and the same time reloaded (439.800) agree.
     public static func timestamp(_ t: Seconds) -> String {
-        let tenths = Int((max(t, 0) * 10).rounded(.down))
+        let tenths = Int((max(t, 0) * 1000).rounded()) / 100
         let h = tenths / 36000, m = (tenths / 600) % 60, s = (tenths / 10) % 60, d = tenths % 10
         return String(format: "%02d:%02d:%02d.%d", h, m, s, d)
     }

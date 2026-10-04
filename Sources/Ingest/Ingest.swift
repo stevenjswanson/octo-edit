@@ -35,12 +35,15 @@ public struct Ingest: Sendable {
         self.analyzer = analyzer
     }
 
+    /// Cancelling the calling task stops the run with `CancellationError`.
     public func run(video: URL, zoom: URL?, settings: ProjectSettings,
                     progress: @escaping @Sendable (Stage, Double) -> Void = { _, _ in }) async throws -> Result {
         progress(.analyzingAudio, 0)
         let envelope = try await analyzer.envelope(of: video)
         progress(.analyzingAudio, 1)
+        try Task.checkCancellation()
         let raw = try await transcriber.transcribe(audio: video) { progress(.transcribing, $0) }
+        try Task.checkCancellation()
         let refined = refiner.refine(raw, envelope: envelope)
 
         var project = Project(source: video.standardizedFileURL.path, settings: settings)

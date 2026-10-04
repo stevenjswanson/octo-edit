@@ -53,16 +53,23 @@ public struct AppleSpeechTranscriber: Transcriber {
             return words
         }
         do {
-            if let last = try await analyzer.analyzeSequence(from: file) {
-                try await analyzer.finalizeAndFinish(through: last)
-            } else {
-                await analyzer.cancelAndFinishNow()
+            // Cancelling the calling task stops the analyzer (and so the results stream).
+            try await withTaskCancellationHandler {
+                if let last = try await analyzer.analyzeSequence(from: file) {
+                    try await analyzer.finalizeAndFinish(through: last)
+                } else {
+                    await analyzer.cancelAndFinishNow()
+                }
+            } onCancel: {
+                Task { await analyzer.cancelAndFinishNow() }
             }
+            try Task.checkCancellation()
         } catch {
             collector.cancel()
             throw error
         }
         let words = try await collector.value
+        try Task.checkCancellation()
         progress(1)
         return words.sorted { $0.start < $1.start }
     }
