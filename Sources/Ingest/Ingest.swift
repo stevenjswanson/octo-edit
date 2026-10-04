@@ -26,7 +26,9 @@ public struct Ingest: Sendable {
     /// Paragraph breaks when there is no Zoom transcript.
     public var paragraphPause: Seconds = 1.5
     public var longPause: Seconds = 2.5
-    public var maxParagraphWords = 80
+    public var maxParagraphWords = 90
+    /// With a Zoom transcript, a pause this long always starts a paragraph.
+    public var cuePause: Seconds = 1.0
 
     public init(transcriber: any Transcriber, analyzer: any EnvelopeAnalyzer) {
         self.transcriber = transcriber
@@ -59,10 +61,11 @@ public struct Ingest: Sendable {
         return Result(project: project, words: timed, envelope: envelope)
     }
 
-    /// Paragraphs from Zoom cues: one paragraph per cue (Zoom transcripts may name only
-    /// one speaker for the whole meeting, so speaker changes can't be relied on), split
-    /// further only by a long pause inside a cue. Zoom-only cues become `>` paragraphs
-    /// placed by time.
+    /// Paragraphs from Zoom cues. A new paragraph starts at a cue boundary where a
+    /// sentence really ends (Zoom's fake cue-end periods are already repaired), when the
+    /// speaker changes, after a pause, or at a sentence end once a paragraph is long.
+    /// Zoom transcripts may credit one speaker for everything, so speaker alone never
+    /// merges paragraphs. Zoom-only cues become `>` paragraphs placed by time.
     func build(_ p: inout Project, merged: ZoomMerge.Output, cues: [Cue]) {
         var paragraphs: [Paragraph] = []
         var words: [Word] = []
@@ -80,18 +83,25 @@ public struct Ingest: Sendable {
         }
 
         var lastCue: Int?
+        var countInParagraph = 0
         for mw in merged.words {
             emitZoomOnly(before: mw.word.start)
             let cue = mw.cue.map { cues[$0] }
             let prev = words.last
-            let newCue = paragraphs.last.map { $0.zoomOnly || mw.cue != lastCue } ?? true
+            let afterZoomOnly = paragraphs.last?.zoomOnly ?? true
+            let speakerChanged = paragraphs.last.map { $0.speaker != cue?.speaker } ?? true
             let pause = (prev?.end).map { mw.word.start - $0 } ?? 0
+            let sentenceEnded = prev.map { ZoomMerge.endsSentence($0.text) } ?? false
+            let cueBoundary = mw.cue != lastCue
             lastCue = mw.cue
-            if paragraphs.isEmpty || newCue || pause >= longPause {
+            if afterZoomOnly || speakerChanged || pause >= cuePause || (cueBoundary && sentenceEnded)
+                || (countInParagraph >= maxParagraphWords && sentenceEnded) {
+                countInParagraph = 0
                 paragraphs.append(Paragraph(id: ParagraphID(paragraphs.count + 1), speaker: cue?.speaker, zoomCue: cue?.index))
             }
             words.append(Word(id: WordID(words.count + 1), text: mw.word.text, start: mw.word.start, end: mw.word.end,
                               confidence: mw.word.confidence, paragraph: paragraphs.last!.id))
+            countInParagraph += 1
         }
         emitZoomOnly(before: nil)
         p.paragraphs = paragraphs

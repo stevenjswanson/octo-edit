@@ -89,22 +89,32 @@ import Transcribe
         func envelope(of media: URL) async throws -> Envelope { Envelope(bucketsPerSecond: 200, rms: []) }
     }
 
-    /// Zoom transcripts that credit one speaker for everything must still give one paragraph per cue.
-    @Test func singleSpeakerTranscriptSplitsByCue() {
-        let cues = (0..<4).map { Cue(index: $0 + 1, start: Double($0) * 3, end: Double($0) * 3 + 2.5, speaker: "Host",
-                                     text: "line \($0) of the meeting") }
-        // Back-to-back speech: no pauses to split on.
-        let asr = cues.flatMap { c in
-            c.text.split(separator: " ").enumerated().map { k, w in
-                TimedWord(text: String(w), start: c.start + Double(k) * 0.5, end: c.start + Double(k) * 0.5 + 0.5)
-            }
+    /// One speaker for everything (as in real Zoom exports): paragraphs follow real
+    /// sentence ends at cue boundaries, and Zoom's mid-sentence cue periods are repaired.
+    @Test func singleSpeakerCuesRepairedAndSplitAtSentenceEnds() {
+        let cueTexts = ["What percent of your code do you read?",
+                        "I read most of it to make sure that we're not.",     // Zoom cut mid-sentence
+                        "Putting out risky code. And I review it daily.",
+                        "What skill matters more today?"]
+        let heard = ["What percent of your code do you read?",
+                     "I read most of it to make sure that we're not, um,",
+                     "putting out risky code. And I review it daily.",
+                     "What skill matters more today?"]
+        var cues: [Cue] = []
+        var asr: [TimedWord] = []
+        var t = 0.0
+        for (n, (z, h)) in zip(cueTexts, heard).enumerated() {
+            let start = t
+            for w in h.split(separator: " ") { asr.append(TimedWord(text: String(w), start: t, end: t + 0.3)); t += 0.3 }
+            cues.append(Cue(index: n + 1, start: start, end: t, speaker: "Host", text: z))
         }
+        let merged = ZoomMerge.merge(asr: asr, cues: cues)
         var p = Project(source: "x.mp4")
-        Ingest(transcriber: NoTranscriber(), analyzer: NoAnalyzer())
-            .build(&p, merged: ZoomMerge.merge(asr: asr, cues: cues), cues: cues)
-        #expect(p.paragraphs.count == 4)
-        #expect(p.paragraphs.map(\.zoomCue) == [1, 2, 3, 4])
-        #expect(p.paragraphs.allSatisfy { $0.speaker == "Host" })
+        Ingest(transcriber: NoTranscriber(), analyzer: NoAnalyzer()).build(&p, merged: merged, cues: cues)
+        let paras = p.paragraphs.map { id in p.words.filter { $0.paragraph == id.id }.map(\.text).joined(separator: " ") }
+        #expect(paras == ["What percent of your code do you read?",
+                          "I read most of it to make sure that we're not um, putting out risky code. And I review it daily.",
+                          "What skill matters more today?"])
     }
 }
 
