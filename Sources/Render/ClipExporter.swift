@@ -47,7 +47,12 @@ public enum ClipExporter {
         // the source's GOPs through and hide the extra frames with edit lists, which many
         // players and upload sites ignore (stray frames at every cut).
         session.videoComposition = try await AVVideoComposition.videoComposition(withPropertiesOf: built.composition)
-        try? FileManager.default.removeItem(at: url)
+        // Export to a hidden temporary name and rename when done, so a half-written
+        // file (which players can't open) never appears under the clip's name.
+        let fm = FileManager.default
+        let partial = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.deletingPathExtension().lastPathComponent).partial.mp4")
+        try? fm.removeItem(at: partial)
         let watcher = Task {
             for await state in session.states(updateInterval: 0.25) {
                 if case .exporting(let p) = state { progress(p.fractionCompleted) }
@@ -55,9 +60,15 @@ public enum ClipExporter {
         }
         defer { watcher.cancel() }
         do {
-            try await session.export(to: url, as: .mp4)
+            try await session.export(to: partial, as: .mp4)
         } catch {
+            try? fm.removeItem(at: partial)
             throw RenderError.exportFailed(error.localizedDescription)
+        }
+        if fm.fileExists(atPath: url.path) {
+            _ = try fm.replaceItemAt(url, withItemAt: partial)
+        } else {
+            try fm.moveItem(at: partial, to: url)
         }
         progress(1)
     }
