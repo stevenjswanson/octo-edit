@@ -77,8 +77,11 @@ enum MainMenu {
         m.addItem(item("Paste", #selector(NSText.paste(_:)), "v"))
         m.addItem(item("Select All", #selector(NSText.selectAll(_:)), "a"))
         m.addItem(.separator())
-        m.addItem(item("Find…", #selector(NSTextView.performFindPanelAction(_:)), "f"))
-        m.items.last?.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+        m.addItem(item("Find…", #selector(ProjectDocument.findInTranscript(_:)), "f"))
+        m.addItem(item("Find Next", #selector(ProjectDocument.findNext(_:)), "g"))
+        m.addItem(item("Find Previous", #selector(ProjectDocument.findPrevious(_:)), "g", [.command, .shift]))
+        m.addItem(.separator())
+        m.addItem(item("Edit Text", #selector(ProjectDocument.toggleTextEditing(_:)), "t", [.command, .shift]))
         return m
     }
 

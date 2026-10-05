@@ -20,11 +20,14 @@ struct DocumentView: View {
             .frame(minHeight: 240, idealHeight: 420)
 
             VStack(spacing: 0) {
+                TranscriptToolbar(model: model)
+                Divider()
                 if !model.issues.isEmpty { IssuesBanner(issues: model.issues) }
                 TranscriptView(model: model, revision: model.revision, selectedClip: model.selectedClip,
-                               currentWord: model.currentWord, followPlayhead: model.anyPlaying,
+                               currentWord: model.currentWord, followPlayhead: model.anyPlaying && model.followPlayhead,
                                reveal: model.reveal, inspected: model.inspected,
-                               inspectRequest: model.inspectRequest)
+                               inspectRequest: model.inspectRequest, textEditing: model.textEditing,
+                               searchText: model.searchText, searchStep: model.searchStep.id)
                     .overlay(alignment: .bottom) {
                         if let toast = model.toast {
                             Text(toast.text)
@@ -66,6 +69,7 @@ struct SourcePane: View {
                 .foregroundStyle(.white)
             } else {
                 PlayerView(player: model.player, onFocus: { model.focus(.source) })
+                    .overlay(alignment: .topTrailing) { SpeedBadge(watcher: model.sourceSpeed) }
             }
         }
     }
@@ -99,6 +103,7 @@ struct ClipPreviewPane: View {
                     Text(message).foregroundStyle(.secondary)
                 } else {
                     PlayerView(player: preview.player, onFocus: focus)
+                        .overlay(alignment: .topTrailing) { SpeedBadge(watcher: model.previewSpeed) }
                 }
             }
             SegmentStrip(segments: preview.segments, duration: preview.duration)

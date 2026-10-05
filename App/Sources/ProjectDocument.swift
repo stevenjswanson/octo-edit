@@ -30,7 +30,8 @@ final class ProjectDocument: NSDocument {
         window.styleMask.insert(.fullSizeContentView)
         window.setContentSize(NSSize(width: 1400, height: 900))
         window.minSize = NSSize(width: 900, height: 600)
-        window.setFrameAutosaveName("OctoEditProject")
+        // Each project remembers its own window frame (several can be open at once).
+        if let path = fileURL?.path { window.setFrameAutosaveName("OctoEdit " + path) }
         let controller = NSWindowController(window: window)
         addWindowController(controller)
         NotificationCenter.default.addObserver(self, selector: #selector(windowDidBecomeKey),
@@ -98,6 +99,7 @@ final class ProjectDocument: NSDocument {
     /// asking. Only when transcript.md was edited elsewhere since the last save does the
     /// usual question appear, so neither version is overwritten silently.
     override func canClose(withDelegate delegate: Any, shouldClose selector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
+        MainActor.assumeIsolated { model.endTextEditing() }   // a text session is applied, not lost
         guard isDocumentEdited, let url = fileURL, let type = fileType,
               FileStamp(Self.transcriptURL(url)) == transcriptStamp else {
             return super.canClose(withDelegate: delegate, shouldClose: selector, contextInfo: contextInfo)
@@ -194,6 +196,17 @@ final class ProjectDocument: NSDocument {
     }
     @objc func nameUnnamedClips(_ sender: Any?) { MainActor.assumeIsolated { model.nameUnnamedClips() } }
 
+    @objc func findInTranscript(_ sender: Any?) { MainActor.assumeIsolated { model.focusSearch() } }
+    @objc func findNext(_ sender: Any?) { MainActor.assumeIsolated { model.findNext() } }
+    @objc func findPrevious(_ sender: Any?) { MainActor.assumeIsolated { model.findPrevious() } }
+    @objc func toggleTextEditing(_ sender: Any?) { MainActor.assumeIsolated { model.toggleTextEditing() } }
+
+    /// ⌘S during a text session applies the session first, so what's saved is what you see.
+    override func save(_ sender: Any?) {
+        MainActor.assumeIsolated { model.endTextEditing() }
+        super.save(sender)
+    }
+
     @objc func togglePlayPause(_ sender: Any?) { MainActor.assumeIsolated { model.togglePlay() } }
     @objc func toggleAutoPreview(_ sender: Any?) {
         MainActor.assumeIsolated { PlaybackSettings.shared.autoPreview.toggle() }
@@ -205,6 +218,16 @@ final class ProjectDocument: NSDocument {
         if item.action == #selector(togglePlayPause(_:)) {
             // Leave Space to text fields being typed in.
             if let text = responder as? NSTextView, text.isEditable, !(text is WordTextView) { return false }
+            // In Edit Text mode Space types a space.
+            if responder is WordTextView, MainActor.assumeIsolated({ model.textEditing }) { return false }
+            return true
+        }
+        if item.action == #selector(toggleTextEditing(_:)) {
+            let on = MainActor.assumeIsolated { model.textEditing }
+            (item as? NSMenuItem)?.state = on ? .on : .off
+            return !MainActor.assumeIsolated { model.loadErrors }
+        }
+        if [#selector(findInTranscript(_:)), #selector(findNext(_:)), #selector(findPrevious(_:))].contains(item.action) {
             return true
         }
         if item.action == #selector(toggleAutoPreview(_:)) {

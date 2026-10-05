@@ -8,6 +8,10 @@ extension NSAttributedString.Key {
     /// On a clip marker's characters: the clip's raw id, and whether it's the start marker.
     static let octoMarkerClip = NSAttributedString.Key("octoMarkerClip")
     static let octoMarkerIn = NSAttributedString.Key("octoMarkerIn")
+    /// The paragraph (raw id) a header line or body character belongs to.
+    static let octoParagraph = NSAttributedString.Key("octoParagraph")
+    /// On a paragraph header line (time and speaker), including its newline.
+    static let octoHeader = NSAttributedString.Key("octoHeader")
 }
 
 /// A clip start (▶) or end (◀) marker in the transcript.
@@ -28,6 +32,9 @@ struct TranscriptView: NSViewRepresentable {
     let reveal: (word: Int, request: Int)?
     let inspected: BoundaryRef?
     let inspectRequest: Int
+    let textEditing: Bool
+    let searchText: String
+    let searchStep: Int
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
@@ -64,11 +71,14 @@ struct TranscriptView: NSViewRepresentable {
         scroll.documentView = textView
         context.coordinator.textView = textView
         textView.coordinator = context.coordinator
+        let coordinator = context.coordinator
+        model.textProvider = { [weak coordinator] in coordinator?.editedParagraphs() ?? [] }
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         let c = context.coordinator
+        if c.editing != textEditing { c.setEditing(textEditing) }
         if c.revision != revision || c.selectedClip != selectedClip {
             c.rebuild(revision: revision, selectedClip: selectedClip, scroll: scroll)
         }
@@ -76,8 +86,11 @@ struct TranscriptView: NSViewRepresentable {
             c.revealRequest = reveal.request
             c.reveal(reveal.word)
         }
-        c.highlight(currentWord, follow: followPlayhead)
-        c.updateInspector(inspected, request: inspectRequest)
+        if !textEditing {
+            c.highlight(currentWord, follow: followPlayhead)
+            c.updateInspector(inspected, request: inspectRequest)
+        }
+        c.updateSearch(searchText, step: model.searchStep)
     }
 
     @MainActor
@@ -90,6 +103,9 @@ struct TranscriptView: NSViewRepresentable {
         var wordRanges: [NSRange] = []
         var highlighted: NSRange?
         private var settingSelection = false
+        /// Text-edit mode (see `setEditing`).
+        private(set) var editing = false
+        private var sessionUndo: UndoManager?
         private var popover: NSPopover?
         private var popoverRequest = -1
         /// A bold bar at the inspected cut, so it's clear in the text which one is open.
@@ -124,6 +140,7 @@ struct TranscriptView: NSViewRepresentable {
                 textView.setSelectedRange(NSRange(location: wordRanges[w].location, length: 0))
             }
             settingSelection = false
+            searchDirty = true
             // Belt and braces: if anything still nudged the view, put it back.
             if scroll.contentView.bounds.origin != origin {
                 scroll.contentView.scroll(to: origin)
@@ -135,7 +152,7 @@ struct TranscriptView: NSViewRepresentable {
         /// must not make every run look changed (that would relayout everything).
         static let styledKeys: [NSAttributedString.Key] = [
             .font, .foregroundColor, .backgroundColor, .paragraphStyle, .strikethroughStyle,
-            .octoWord, .octoMarkerClip, .octoMarkerIn,
+            .octoWord, .octoMarkerClip, .octoMarkerIn, .octoParagraph, .octoHeader,
         ]
 
         static func sameStyling(_ a: [NSAttributedString.Key: Any], _ b: [NSAttributedString.Key: Any]) -> Bool {
@@ -186,15 +203,86 @@ struct TranscriptView: NSViewRepresentable {
 
         // MARK: Selection ↔ words
 
-        /// Cut mode: the words themselves are never changed by typing.
-        func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool { false }
+        // MARK: Text-edit mode
+
+        /// Cut mode: typing never changes the words. Text-edit mode: typing is allowed
+        /// inside a paragraph's words only — never in a header line, on a clip marker,
+        /// or across a paragraph break (Return doesn't split paragraphs).
+        func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+            guard editing, let storage = textView.textStorage else { return false }
+            if let r = replacementString, r.contains(where: \.isNewline) { return false }
+            let text = storage.string as NSString
+            if range.length > 0 {
+                var ok = true
+                storage.enumerateAttributes(in: range) { attrs, _, stop in
+                    if attrs[.octoHeader] != nil || attrs[.octoMarkerClip] != nil { ok = false; stop.pointee = true }
+                }
+                if !ok || text.substring(with: range).contains(where: \.isNewline) { return false }
+                return true
+            }
+            // An insertion point must sit in a body line (possibly at its very end).
+            guard range.location < storage.length else { return false }
+            if storage.attribute(.octoHeader, at: range.location, effectiveRange: nil) != nil { return false }
+            return storage.attribute(.octoParagraph, at: range.location, effectiveRange: nil) != nil
+        }
+
+        func setEditing(_ on: Bool) {
+            guard let textView else { return }
+            editing = on
+            sessionUndo = on ? UndoManager() : nil
+            textView.allowsUndo = on
+            textView.backgroundColor = on
+                ? NSColor.textBackgroundColor.blended(withFraction: 0.07, of: .systemYellow) ?? .textBackgroundColor
+                : .textBackgroundColor
+            if on {
+                textView.layoutManager?.removeTemporaryAttribute(.backgroundColor,
+                    forCharacterRange: NSRange(location: 0, length: textView.textStorage?.length ?? 0))
+                highlighted = nil
+                searchDirty = true
+                textView.window?.makeFirstResponder(textView)
+            }
+        }
+
+        /// The session's own undo stack, so text-editing undo stays inside the session.
+        func undoManager(for view: NSTextView) -> UndoManager? { editing ? sessionUndo : nil }
+
+        /// Typed text gets the paragraph's plain body style (never a marker's or a word's).
+        private func updateTypingAttributes(_ textView: NSTextView) {
+            guard let storage = textView.textStorage, storage.length > 0 else { return }
+            let loc = min(textView.selectedRange().location, storage.length - 1)
+            let probe = [loc, max(loc - 1, 0)].first { storage.attribute(.octoParagraph, at: $0, effectiveRange: nil) != nil }
+            guard let k = probe, let pid = storage.attribute(.octoParagraph, at: k, effectiveRange: nil) else { return }
+            textView.typingAttributes = TranscriptText.bodyAttributes(paragraph: pid as? Int ?? 0)
+        }
+
+        /// Each paragraph's words as edited: its body line, minus clip markers, split on spaces.
+        func editedParagraphs() -> [(ParagraphID, [String])] {
+            guard let storage = textView?.textStorage else { return [] }
+            let text = storage.string as NSString
+            var out: [(ParagraphID, [String])] = []
+            var lineStart = 0
+            while lineStart < text.length {
+                let line = text.lineRange(for: NSRange(location: lineStart, length: 0))
+                defer { lineStart = NSMaxRange(line) }
+                // The newline carries the paragraph id even when the line was emptied.
+                let probe = NSMaxRange(line) - 1
+                guard storage.attribute(.octoHeader, at: line.location, effectiveRange: nil) == nil,
+                      let raw = storage.attribute(.octoParagraph, at: probe, effectiveRange: nil) as? Int else { continue }
+                var body = ""
+                storage.enumerateAttributes(in: line) { attrs, r, _ in
+                    if attrs[.octoMarkerClip] == nil { body += text.substring(with: r) }
+                }
+                out.append((ParagraphID(raw), body.split(whereSeparator: { $0.isWhitespace }).map(String.init)))
+            }
+            return out
+        }
 
         /// Selections cover whole words only. The end that moved outward grows to the
         /// whole word; an end that moved inward drops the partly covered word (so ⇧←
         /// steps back word by word instead of sticking at the word's end).
         func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRange old: NSRange,
                       toCharacterRange new: NSRange) -> NSRange {
-            guard new.length > 0, !wordRanges.isEmpty else { return new }
+            guard !editing, new.length > 0, !wordRanges.isEmpty else { return new }
             let newEnd = NSMaxRange(new)
             var start: Int
             if new.location > old.location && old.length > 0 {
@@ -225,6 +313,7 @@ struct TranscriptView: NSViewRepresentable {
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !settingSelection, let textView else { return }
+            if editing { updateTypingAttributes(textView); return }
             let r = textView.selectedRange()
             if !wordRanges.isEmpty { model.caretWord = min(firstWord(endingAfter: r.location), wordRanges.count - 1) }
             model.selection = r.length == 0 ? nil : words(in: r)
@@ -298,6 +387,7 @@ struct TranscriptView: NSViewRepresentable {
             let length = textView.textStorage?.length ?? 0
             if let old = highlighted, NSMaxRange(old) <= length {
                 lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: old)
+                restoreSearchHighlights(in: old)
             }
             highlighted = range
             if let range, NSMaxRange(range) <= length {
@@ -305,6 +395,81 @@ struct TranscriptView: NSViewRepresentable {
             }
             if follow, word != highlightedWord, let range { textView.scrollRangeToVisible(range) }
             highlightedWord = word
+        }
+
+        // MARK: Search
+
+        private var searchQuery = ""
+        private var searchDirty = false
+        private var searchMatches: [NSRange] = []
+        private var searchIndex = -1
+        private var lastSearchStep = 0
+        private static let matchColor = NSColor.systemYellow.withAlphaComponent(0.45)
+
+        /// Highlights every match of `query` and steps through them on Find Next/Previous.
+        func updateSearch(_ query: String, step: (delta: Int, id: Int)) {
+            guard let textView, let storage = textView.textStorage, let lm = textView.layoutManager else { return }
+            if query != searchQuery || searchDirty {
+                let queryChanged = query != searchQuery
+                searchQuery = query
+                searchDirty = false
+                for r in searchMatches where NSMaxRange(r) <= storage.length {
+                    lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: r)
+                }
+                searchMatches = []
+                if query.count >= 1 {
+                    let text = storage.string as NSString
+                    var from = 0
+                    while from < text.length {
+                        let r = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive],
+                                           range: NSRange(location: from, length: text.length - from))
+                        if r.location == NSNotFound { break }
+                        searchMatches.append(r)
+                        from = NSMaxRange(r)
+                    }
+                    for r in searchMatches { lm.addTemporaryAttribute(.backgroundColor, value: Self.matchColor, forCharacterRange: r) }
+                }
+                if let h = highlighted, NSMaxRange(h) <= storage.length {
+                    lm.addTemporaryAttribute(.backgroundColor, value: NSColor.findHighlightColor, forCharacterRange: h)
+                }
+                if queryChanged {
+                    // Typing a query jumps to the first match at or after the caret.
+                    let caret = textView.selectedRange().location
+                    searchIndex = (searchMatches.firstIndex { $0.location >= caret } ?? 0) - 1
+                    if !searchMatches.isEmpty { move(1) }
+                } else {
+                    searchIndex = min(searchIndex, searchMatches.count - 1)
+                }
+                publishStatus()
+            }
+            if step.id != lastSearchStep {
+                lastSearchStep = step.id
+                if !searchMatches.isEmpty { move(step.delta) }
+                publishStatus()
+            }
+        }
+
+        private func move(_ delta: Int) {
+            guard let textView, !searchMatches.isEmpty else { return }
+            searchIndex = ((searchIndex + delta) % searchMatches.count + searchMatches.count) % searchMatches.count
+            let r = searchMatches[searchIndex]
+            textView.scrollRangeToVisible(r)
+            textView.showFindIndicator(for: r)
+        }
+
+        private func publishStatus() {
+            let status = searchQuery.isEmpty ? "" : searchMatches.isEmpty ? "No matches"
+                : "\(max(searchIndex, 0) + 1) of \(searchMatches.count)"
+            let model = model
+            DispatchQueue.main.async { if model.searchStatus != status { model.searchStatus = status } }
+        }
+
+        /// Puts search highlights back where a playhead highlight was removed.
+        private func restoreSearchHighlights(in range: NSRange) {
+            guard let lm = textView?.layoutManager else { return }
+            for r in searchMatches where NSIntersectionRange(r, range).length > 0 {
+                lm.addTemporaryAttribute(.backgroundColor, value: Self.matchColor, forCharacterRange: r)
+            }
         }
 
         // MARK: Boundary inspector popover
@@ -378,7 +543,10 @@ struct TranscriptView: NSViewRepresentable {
 final class WordTextView: NSTextView {
     weak var coordinator: TranscriptView.Coordinator?
 
+    private var editing: Bool { coordinator?.editing ?? false }
+
     override func mouseDown(with event: NSEvent) {
+        if editing { return super.mouseDown(with: event) }
         let point = convert(event.locationInWindow, from: nil)
         if let marker = marker(at: point) {
             if event.clickCount == 2, let coordinator, let b = coordinator.model.boundary(for: marker) {
@@ -388,7 +556,12 @@ final class WordTextView: NSTextView {
             trackMarker(marker, from: event)
             return
         }
-        super.mouseDown(with: event)   // runs the selection tracking loop until mouse-up
+        let plain = event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty
+        if event.clickCount == 1 && plain {
+            trackSelection(from: event)    // our own loop, so two-finger scrolling works while dragging
+        } else {
+            super.mouseDown(with: event)   // double/triple-click and shift-click: AppKit's own
+        }
         // Double-clicking a cut-out word opens the inspector at the nearest cut.
         if event.clickCount == 2, let w = word(at: point), let coordinator,
            let storage = textStorage, coordinator.wordRanges.indices.contains(w),
@@ -400,6 +573,68 @@ final class WordTextView: NSTextView {
         if coordinator.model.clicked(word: w), coordinator.wordRanges.indices.contains(w) {
             setSelectedRange(coordinator.wordRanges[w])
         }
+    }
+
+    /// Drag-to-select that also lets scroll events through (AppKit's own loop swallows
+    /// them): the selection keeps following the pointer as the text scrolls under it.
+    private func trackSelection(from down: NSEvent) {
+        guard let window else { return }
+        let anchor = characterIndexForInsertion(at: convert(down.locationInWindow, from: nil))
+        window.makeFirstResponder(self)
+        setSelectedRange(NSRange(location: anchor, length: 0))
+        var pointer = down.locationInWindow
+        var dragged = false
+        func follow() {
+            let c = characterIndexForInsertion(at: convert(pointer, from: nil))
+            setSelectedRange(NSRange(location: min(anchor, c), length: abs(c - anchor)),
+                             affinity: .downstream, stillSelecting: true)
+        }
+        while let e = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .scrollWheel]) {
+            if e.type == .leftMouseUp { break }
+            if e.type == .scrollWheel {
+                enclosingScrollView?.scrollWheel(with: e)
+                if dragged { follow() }
+                continue
+            }
+            pointer = e.locationInWindow
+            if !dragged, hypot(pointer.x - down.locationInWindow.x, pointer.y - down.locationInWindow.y) < 3 { continue }
+            dragged = true
+            autoscroll(with: e)
+            follow()
+        }
+        setSelectedRange(selectedRange(), affinity: .downstream, stillSelecting: false)
+    }
+
+    // MARK: Cursor over markers
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas where area.owner === self && area.userInfo?["octo"] != nil { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: ["octo": true]))
+    }
+
+    /// The ↔ cursor over a clip marker (they can be dragged); the text cursor elsewhere.
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        if !editing, marker(at: convert(event.locationInWindow, from: nil)) != nil {
+            NSCursor.resizeLeftRight.set()
+        } else {
+            NSCursor.iBeam.set()
+        }
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if !editing, marker(at: convert(event.locationInWindow, from: nil)) != nil {
+            NSCursor.resizeLeftRight.set()
+        } else {
+            super.cursorUpdate(with: event)
+        }
+    }
+
+    /// Plain text only when pasting in text-edit mode (no stray styles or markers).
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        editing ? [.string] : super.readablePasteboardTypes
     }
 
     private func word(at point: NSPoint) -> Int? {
@@ -464,11 +699,38 @@ final class WordTextView: NSTextView {
         }
     }
 
+    @objc private func setSpeakerFromMenu(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? Int, let model = coordinator?.model, let window else { return }
+        let pid = ParagraphID(raw)
+        let current = model.project.paragraph(pid)?.speaker ?? ""
+        let alert = NSAlert()
+        alert.messageText = "Speaker"
+        alert.informativeText = "Leave empty for no speaker."
+        let field = NSTextField(string: current)
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        let everywhere = NSButton(checkboxWithTitle: current.isEmpty ? "Every paragraph without a speaker"
+                                                                      : "Every paragraph by “\(current)”",
+                                  target: nil, action: nil)
+        let stack = NSStackView(views: [field, everywhere])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 260, height: 52)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Set")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            model.setSpeaker(of: pid, to: field.stringValue, everywhere: everywhere.state == .on)
+        }
+    }
+
     /// No drag-and-drop of selected text (dragging is for selecting and for markers).
     override func dragSelection(with event: NSEvent, offset mouseOffset: NSSize, slideBack: Bool) -> Bool { false }
 
     /// Cut-mode keys without ⌘. (The same commands are in the Clip menu.)
     override func keyDown(with event: NSEvent) {
+        if editing { return super.keyDown(with: event) }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
         let action: Selector? = switch (event.keyCode, mods, key) {
@@ -487,6 +749,22 @@ final class WordTextView: NSTextView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        // On a paragraph header: set its speaker.
+        let point = convert(event.locationInWindow, from: nil)
+        if let storage = textStorage, storage.length > 0, let coordinator {
+            let i = min(characterIndexForInsertion(at: point), storage.length - 1)
+            if storage.attribute(.octoHeader, at: i, effectiveRange: nil) != nil,
+               let raw = storage.attribute(.octoParagraph, at: i, effectiveRange: nil) as? Int {
+                let menu = NSMenu()
+                let item = NSMenuItem(title: "Set Speaker…", action: #selector(setSpeakerFromMenu(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = raw
+                item.isEnabled = !coordinator.model.loadErrors
+                menu.addItem(item)
+                return menu
+            }
+        }
+        if editing { return super.menu(for: event) }
         let menu = NSMenu()
         for item in MainMenu.clipItems() { menu.addItem(item) }
         menu.addItem(.separator())
@@ -497,14 +775,25 @@ final class WordTextView: NSTextView {
 
 /// Builds the attributed transcript and remembers where each word landed.
 enum TranscriptText {
+    static let bodyFont = NSFont.systemFont(ofSize: 15)
+    static let bodyStyle: NSParagraphStyle = {
+        let p = NSMutableParagraphStyle()
+        p.lineSpacing = 3
+        p.paragraphSpacing = 14
+        return p
+    }()
+
+    /// Plain text in a paragraph (what typing in text-edit mode produces).
+    static func bodyAttributes(paragraph: Int) -> [NSAttributedString.Key: Any] {
+        [.font: bodyFont, .paragraphStyle: bodyStyle, .foregroundColor: NSColor.labelColor, .octoParagraph: paragraph]
+    }
+
     static func build(_ p: Project, selectedClip: ClipID?) -> (text: NSAttributedString, wordRanges: [NSRange]) {
         let out = NSMutableAttributedString()
         var ranges = Array(repeating: NSRange(location: NSNotFound, length: 0), count: p.words.count)
 
-        let body = NSFont.systemFont(ofSize: 15)
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = 3
-        paragraphStyle.paragraphSpacing = 14
+        let body = bodyFont
+        let paragraphStyle = bodyStyle
         let headerStyle = NSMutableParagraphStyle()
         headerStyle.paragraphSpacing = 2
         let headerAttrs: [NSAttributedString.Key: Any] = [
@@ -529,12 +818,12 @@ enum TranscriptText {
             let emphasis: CGFloat = selectedOrdinal == nil ? 0.16 : (n == selectedOrdinal ? 0.26 : 0.08)
             return ClipPalette.nsColor(n).withAlphaComponent(emphasis)
         }
-        func marker(_ label: String, _ n: Int, _ clip: Clip, inPoint: Bool) -> NSAttributedString {
+        func marker(_ label: String, _ n: Int, _ clip: Clip, inPoint: Bool, paragraph: Int) -> NSAttributedString {
             let selected = selectedOrdinal == nil || n == selectedOrdinal
             return NSAttributedString(string: label, attributes: [
                 .font: NSFont.systemFont(ofSize: 11, weight: .bold), .foregroundColor: NSColor.white,
                 .backgroundColor: ClipPalette.nsColor(n).withAlphaComponent(selected ? 1 : 0.45),
-                .octoMarkerClip: clip.id.raw, .octoMarkerIn: inPoint,
+                .octoMarkerClip: clip.id.raw, .octoMarkerIn: inPoint, .octoParagraph: paragraph,
             ])
         }
 
@@ -551,16 +840,19 @@ enum TranscriptText {
             var header = timestamp(time)
             if let s = para.speaker { header += "   " + s.uppercased() }
             if para.zoomOnly { header += "   (Zoom only — not in the video)" }
-            out.append(NSAttributedString(string: header + "\n", attributes: headerAttrs))
+            var hAttrs = headerAttrs
+            hAttrs[.octoHeader] = true
+            hAttrs[.octoParagraph] = pid.raw
+            out.append(NSAttributedString(string: header + "\n", attributes: hAttrs))
 
             for k in i..<j {
                 if let (n, clip) = opens[k] {
-                    out.append(marker(" ▶ \(clip.name ?? slugs[clip.id] ?? "clip") ", n, clip, inPoint: true))
-                    out.append(NSAttributedString(string: " ", attributes: [.font: body]))
+                    out.append(marker(" ▶ \(clip.name ?? slugs[clip.id] ?? "clip") ", n, clip, inPoint: true, paragraph: pid.raw))
+                    out.append(NSAttributedString(string: " ", attributes: [.font: body, .octoParagraph: pid.raw]))
                 }
                 var attrs: [NSAttributedString.Key: Any] = [
                     .font: body, .paragraphStyle: paragraphStyle, .octoWord: k,
-                    .foregroundColor: NSColor.labelColor,
+                    .foregroundColor: NSColor.labelColor, .octoParagraph: pid.raw,
                 ]
                 let w = p.words[k]
                 if para.zoomOnly || !w.isTimed {
@@ -574,12 +866,12 @@ enum TranscriptText {
                 ranges[k] = NSRange(location: out.length, length: (w.text as NSString).length)
                 out.append(NSAttributedString(string: w.text, attributes: attrs))
                 if let (n, clip) = closes[k] {
-                    out.append(NSAttributedString(string: " ", attributes: [.font: body]))
-                    out.append(marker(" ◀ ", n, clip, inPoint: false))
+                    out.append(NSAttributedString(string: " ", attributes: [.font: body, .octoParagraph: pid.raw]))
+                    out.append(marker(" ◀ ", n, clip, inPoint: false, paragraph: pid.raw))
                 }
                 // Keep the band continuous between words of the same clip.
                 let sep = k + 1 < j ? " " : "\n"
-                var sepAttrs: [NSAttributedString.Key: Any] = [.font: body, .paragraphStyle: paragraphStyle]
+                var sepAttrs: [NSAttributedString.Key: Any] = [.font: body, .paragraphStyle: paragraphStyle, .octoParagraph: pid.raw]
                 if sep == " ", let n = clipOf[k], clipOf[k + 1] == n, closes[k] == nil {
                     sepAttrs[.backgroundColor] = band(n)
                     if omitted.contains(k) && omitted.contains(k + 1) {

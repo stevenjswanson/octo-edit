@@ -25,6 +25,14 @@ struct ClipShelf: View {
                                 model.select(clip: clip.id, reveal: true, seekSource: true)
                                 model.focus(.preview)
                             }
+                            .contextMenu {
+                                Button("Rename…") { model.requestRename(clip.id) }
+                                Button("Export…") { model.exportClip(clip.id) }
+                                    .disabled(model.loadErrors || model.sourceMissing)
+                                Divider()
+                                Button("Delete Clip") { model.deleteClip(clip.id) }
+                            }
+
                     }
                 }
                 .padding(8)

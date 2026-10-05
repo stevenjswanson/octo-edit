@@ -8,6 +8,7 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
     case wouldOmitEverything
     case zoomOnlyText
     case notSplittable
+    case emptyParagraph
 
     public var description: String {
         switch self {
@@ -18,6 +19,7 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
         case .wouldOmitEverything: "omitting this would leave the clip empty"
         case .zoomOnlyText: "clip boundaries and omissions can't be placed in Zoom-only text (it isn't in the recording)"
         case .notSplittable: "the paragraph can't be split there"
+        case .emptyParagraph: "a paragraph can't be left empty (omit its words in a clip instead)"
         }
     }
 }

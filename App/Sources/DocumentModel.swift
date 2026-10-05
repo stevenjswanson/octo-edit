@@ -3,6 +3,7 @@ import AppKit
 import Observation
 import Core
 import Load
+import Align
 
 /// Per-window state: the project (a Core value, changed only through Core operations
 /// via `perform`), load issues, selection, and the source-video player.
@@ -39,6 +40,24 @@ final class DocumentModel {
     /// The source playhead (for the inspector's playhead line).
     private(set) var sourceTime: Double?
 
+    // Transcript tools.
+    /// Keep the playing word in view (off: scroll freely while a video plays).
+    var followPlayhead = UserDefaults.standard.object(forKey: "followPlayhead") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(followPlayhead, forKey: "followPlayhead") }
+    }
+    var searchText = ""
+    /// Find Next / Previous requests: +1 or -1, with a counter so repeats register.
+    private(set) var searchStep = (delta: 0, id: 0)
+    var searchStatus = ""
+    private(set) var searchFocusRequest = 0
+    /// Text-edit mode: the transcript's words can be typed over; clips and timing are
+    /// kept. The session is applied as one undoable change when it ends.
+    private(set) var textEditing = false
+    /// Supplies each paragraph's edited words when a text session ends (set by the view).
+    @ObservationIgnored var textProvider: (() -> [(ParagraphID, [String])])?
+    /// Ask the clip panel to focus its name field (Rename… from the shelf).
+    private(set) var renameRequest = 0
+
     // Boundary inspector (B3).
     /// The cut being inspected; the transcript shows the inspector popover for it.
     var inspected: BoundaryRef?
@@ -62,6 +81,8 @@ final class DocumentModel {
 
     @ObservationIgnored let player = AVPlayer()
     @ObservationIgnored let preview = PreviewModel()
+    @ObservationIgnored lazy var sourceSpeed = SpeedWatcher(player)
+    @ObservationIgnored lazy var previewSpeed = SpeedWatcher(preview.player)
     @ObservationIgnored let thumbnails = Thumbnails()
     @ObservationIgnored weak var undoManager: UndoManager?
     @ObservationIgnored private var timeObserver: Any?
@@ -159,7 +180,7 @@ final class DocumentModel {
 
     // MARK: Editing
 
-    var canEdit: Bool { !loadErrors }
+    var canEdit: Bool { !loadErrors && !textEditing }
 
     /// Applies a Core operation as one undoable step. Refused edits (Core throws) show
     /// a message and leave the project untouched.
@@ -220,6 +241,75 @@ final class DocumentModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
             if self?.toast?.id == id { self?.toast = nil }
         }
+    }
+
+    // MARK: Search
+
+    func findNext() { searchStep = (1, searchStep.id + 1) }
+    func findPrevious() { searchStep = (-1, searchStep.id + 1) }
+    func focusSearch() { searchFocusRequest += 1 }
+
+    // MARK: Text editing
+
+    func beginTextEditing() {
+        guard !loadErrors, !textEditing else { return }
+        closeInspector()
+        player.pause()
+        preview.player.pause()
+        textEditing = true
+    }
+
+    /// Ends the text session, applying every changed paragraph as one undo step.
+    /// A paragraph emptied of words keeps the session open (with a message).
+    func endTextEditing() {
+        guard textEditing else { return }
+        let edits = textProvider?() ?? []
+        if let empty = edits.first(where: { $0.1.isEmpty }) {
+            _ = empty
+            flash("A paragraph can’t be left empty — put a word back (omit words in a clip to cut them).")
+            NSSound.beep()
+            return
+        }
+        let changed = edits.filter { pid, tokens in
+            project.words.filter { $0.paragraph == pid }.map(\.text) != tokens
+        }
+        textEditing = false
+        if changed.isEmpty {
+            revision += 1   // put the text back exactly as the project has it
+        } else {
+            perform("Edit Text") { p in
+                for (pid, tokens) in changed { try p.replaceText(ofParagraph: pid, with: tokens) }
+            }
+        }
+    }
+
+    func toggleTextEditing() { textEditing ? endTextEditing() : beginTextEditing() }
+
+    /// Renames one paragraph's speaker, or every paragraph with the same speaker.
+    func setSpeaker(of pid: ParagraphID, to name: String, everywhere: Bool) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let new = trimmed.isEmpty ? nil : trimmed
+        let old = project.paragraph(pid)?.speaker
+        let targets = everywhere ? project.paragraphs.filter { $0.speaker == old }.map(\.id) : [pid]
+        perform(everywhere ? "Rename Speaker" : "Set Speaker") { p in
+            for id in targets { p.setSpeaker(paragraph: id, new) }
+        }
+    }
+
+    // MARK: Clip shelf
+
+    func requestRename(_ id: ClipID) {
+        select(clip: id, reveal: true)
+        renameRequest += 1
+    }
+
+    func deleteClip(_ id: ClipID) {
+        perform("Delete Clip") { try $0.deleteClip(id) }
+    }
+
+    func exportClip(_ id: ClipID) {
+        select(clip: id)
+        showExport(onlySelected: true)
     }
 
     // MARK: Clip commands (menu, keyboard, context menu)

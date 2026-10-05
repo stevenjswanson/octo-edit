@@ -73,6 +73,7 @@ struct ClipInfoPanel: View {
             if old == .notes { model.setNotes(clipID, notes) }
         }
         .onDisappear { commit(clipID) }
+        .onChange(of: model.renameRequest) { _, _ in focus = .name }
     }
 
     private func load() {

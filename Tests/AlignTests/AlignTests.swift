@@ -1,5 +1,6 @@
 import Testing
 @testable import Align
+import Core
 
 func toks(_ s: String) -> [String] { s.split(separator: " ").map { Aligner.normalize(String($0)) } }
 
@@ -59,5 +60,53 @@ func toks(_ s: String) -> [String] { s.split(separator: " ").map { Aligner.norma
         let t = clock.measure { m = Aligner.matches(a, b) }
         #expect(m.count > 19_500)
         #expect(t < .seconds(5))
+    }
+}
+
+@Suite struct RetextTests {
+    /// "for fy 27 the campus is um flat" with times 0,1,2,…; clip over all of it with "um" omitted.
+    func project() throws -> (Project, ClipID) {
+        let texts = ["for", "fy", "27", "the", "campus", "is", "um", "flat"]
+        let words = texts.enumerated().map { i, t in
+            Word(id: WordID(i + 1), text: t, start: Double(i), end: Double(i) + 0.8, paragraph: ParagraphID(1))
+        }
+        var p = Project(source: "x", paragraphs: [Paragraph(id: ParagraphID(1))], words: words)
+        let id = try p.makeClip(words: 0...7)
+        try p.omit(words: 6...6, in: id)
+        try p.setOffset(clip: id, segment: 0, inPoint: true, -0.2)
+        return (p, id)
+    }
+
+    @Test func correctionsKeepIdsTimesAndClips() throws {
+        var (p, id) = try project()
+        try p.replaceText(ofParagraph: ParagraphID(1), with: ["For", "FY27", "the", "campus", "is", "um", "flat."])
+        #expect(p.words.map(\.text) == ["For", "FY27", "the", "campus", "is", "um", "flat."])
+        #expect(p.words[0].id == WordID(1) && p.words[0].start == 0)          // matched: same word
+        #expect(p.words[1].start == 1 && p.words[1].end == 2.8)               // FY27 spans "fy 27"
+        #expect(p.words.last!.id == WordID(8))                                 // "flat." still "flat"
+        let c = p.clip(id)!
+        #expect(c.segments.map { p.indexRange(of: $0)! } == [0...4, 6...6])   // omission of "um" kept
+        #expect(c.segments[0].inPoint.offset == -0.2)                          // anchor survived
+    }
+
+    @Test func deletingAnEdgeWordMovesTheEdge() throws {
+        var (p, id) = try project()
+        try p.replaceText(ofParagraph: ParagraphID(1), with: ["fy", "27", "the", "campus", "is", "um"])
+        let c = p.clip(id)!
+        #expect(p.indexRange(of: c) == 0...4)        // start moved to "fy"; end before the gone "flat"
+        #expect(c.segments.count == 1)                // the "um" omission no longer sits inside
+        #expect(c.segments[0].inPoint.offset == nil)  // its anchor word was removed
+    }
+
+    @Test func deletingAnOmittedRunRemovesTheOmission() throws {
+        var (p, id) = try project()
+        try p.replaceText(ofParagraph: ParagraphID(1), with: ["for", "fy", "27", "the", "campus", "is", "flat"])
+        #expect(p.clip(id)!.segments.count == 1)
+        #expect(p.indexRange(of: p.clip(id)!) == 0...6)
+    }
+
+    @Test func emptyParagraphIsRefused() throws {
+        var (p, _) = try project()
+        #expect(throws: EditError.emptyParagraph) { try p.replaceText(ofParagraph: ParagraphID(1), with: []) }
     }
 }

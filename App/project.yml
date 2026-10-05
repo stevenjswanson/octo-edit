@@ -17,7 +17,10 @@ targets:
   OctoEdit:
     type: application
     platform: macOS
-    sources: [Sources]
+    sources:
+      - Sources
+      - path: Resources
+        buildPhase: resources
     dependencies:
       - package: OctoEditKit
         product: Core
@@ -39,6 +42,7 @@ targets:
       path: Generated/Info.plist
       properties:
         CFBundleDisplayName: OctoEdit
+        CFBundleIconFile: AppIcon
         NSPrincipalClass: NSApplication
         LSApplicationCategoryType: public.app-category.video
         NSSpeechRecognitionUsageDescription: OctoEdit transcribes your recordings on this Mac to time each word.
