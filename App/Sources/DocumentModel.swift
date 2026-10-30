@@ -22,6 +22,9 @@ final class DocumentModel {
     // Selection. Word indices into `project.words`.
     var selection: ClosedRange<Int>?
     private(set) var selectedClip: ClipID?
+    /// Clips selected together in the shelf (⇧-click), for Merge: always a consecutive
+    /// run that includes `selectedClip` when there is one.
+    private(set) var shelfSelection: Set<ClipID> = []
     /// Ask the transcript to scroll a word into view (the counter makes repeats distinct).
     private(set) var reveal: (word: Int, request: Int)?
     /// A short message shown over the transcript (e.g. why an edit was refused).
@@ -76,6 +79,9 @@ final class DocumentModel {
 
     /// The word at the transcript caret (for ⌘B with no selection).
     @ObservationIgnored var caretWord: Int?
+    /// The word that ends exactly at the caret, if any (so a caret just after a
+    /// struck-out word still counts as on it).
+    @ObservationIgnored var wordBeforeCaret: Int?
     /// The package on disk (set by the document), for writing the waveform cache.
     @ObservationIgnored var packageURL: URL?
 
@@ -131,6 +137,7 @@ final class DocumentModel {
     // MARK: Loading
 
     func apply(_ result: PackageReader.Result) {
+        textEditing = false   // a reload replaces whatever was being typed
         issues = result.issues
         loadErrors = result.hasErrors
         envelope = result.envelope
@@ -173,6 +180,8 @@ final class DocumentModel {
             timeline = p.words.indices.compactMap { i in p.words[i].start.map { ($0, i) } }.sorted { $0.start < $1.start }
         }
         if let id = selectedClip, p.clip(id) == nil { selectedClip = nil }
+        shelfSelection = shelfSelection.filter { p.clip($0) != nil }
+        if let id = selectedClip { shelfSelection.insert(id) }
         if let b = inspected, p.role(of: b) == nil { inspected = nil }
         if let s = selection, s.upperBound >= p.words.count { selection = nil }
         refreshPreview()
@@ -227,7 +236,7 @@ final class DocumentModel {
         switch error as? EditError {
         case .overlapsClip(let id): return "That would overlap clip \(name(id))."
         case .outsideClip: return "Select words inside a single clip."
-        case .wouldOmitEverything: return "Omitting that would leave the clip empty — delete the clip instead."
+        case .wouldOmitEverything: return "That would leave the clip with no words — they’re all omitted (⇧⌫ restores them)."
         case .invalidRange: return "A clip’s end can’t go before its start (or its start after its end)."
         case .some(let e): return e.description.prefix(1).uppercased() + e.description.dropFirst() + "."
         case nil: return String(describing: error)
@@ -266,7 +275,7 @@ final class DocumentModel {
         let edits = textProvider?() ?? []
         if let empty = edits.first(where: { $0.1.isEmpty }) {
             _ = empty
-            flash("A paragraph can’t be left empty — put a word back (omit words in a clip to cut them).")
+            flash("A paragraph can’t be left empty — put a word back (omit words to cut them).")
             NSSound.beep()
             return
         }
@@ -298,6 +307,68 @@ final class DocumentModel {
 
     // MARK: Clip shelf
 
+    /// A click on a shelf card: plain selects just that clip (and goes to it); ⇧ selects
+    /// every clip from the current one to it, so a group never has gaps.
+    func shelfClick(_ id: ClipID, shift: Bool) {
+        if shift, let anchor = selectedClip,
+           let a = project.clips.firstIndex(where: { $0.id == anchor }),
+           let b = project.clips.firstIndex(where: { $0.id == id }) {
+            shelfSelection = Set(project.clips[min(a, b)...max(a, b)].map(\.id))
+            return
+        }
+        select(clip: id, reveal: true, seekSource: true)
+        focus(.preview)
+    }
+
+    /// The shelf selection is two or more clips with no other clip between them.
+    var canMerge: Bool {
+        let idx = project.clips.indices.filter { shelfSelection.contains(project.clips[$0].id) }
+        return idx.count >= 2 && idx.last! - idx.first! == idx.count - 1
+    }
+
+    /// The word a split would start the second clip at: the caret's word (or the start
+    /// of the word selection), when it is inside a clip and not its first word.
+    private var splitPoint: (clip: ClipID, word: Int)? {
+        guard let w = selection?.lowerBound ?? caretWord, let c = project.clip(containingWordAt: w),
+              let r = project.indexRange(of: c), w > r.lowerBound else { return nil }
+        return (c.id, w)
+    }
+
+    var canSplit: Bool { splitPoint != nil }
+
+    /// Clip ▸ Split Clip at Caret: the second clip starts at the caret's word.
+    func splitAtCaret() {
+        guard let (id, w) = splitPoint else {
+            flash("Put the caret inside a clip, on the word the second clip should start with.")
+            NSSound.beep()
+            return
+        }
+        if perform("Split Clip", { try $0.splitClip(id, atWord: w) }) { select(clip: id) }
+    }
+
+    /// ⌫ with a clip selected (and no words selected): delete it after confirming.
+    func confirmDeleteSelectedClip(in window: NSWindow) {
+        guard canEdit, let id = selectedClip, let clip = project.clip(id) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete clip “\(clip.name ?? project.slug(of: id) ?? "clip")”?"
+        alert.informativeText = "The transcript text stays; only the clip and its cuts are removed. You can undo this with ⌘Z."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.deleteClip(id) }
+        }
+    }
+
+    func mergeSelectedClips() {
+        guard shelfSelection.count >= 2 else { return }
+        var merged: ClipID?
+        let ids = Array(shelfSelection)
+        if perform("Merge Clips", { merged = try $0.mergeClips(ids) }), let merged {
+            select(clip: merged, reveal: true)
+        }
+    }
+
     func requestRename(_ id: ClipID) {
         select(clip: id, reveal: true)
         renameRequest += 1
@@ -322,7 +393,19 @@ final class DocumentModel {
     }
 
     var canMakeClip: Bool { selection != nil && clipOverlappingSelection == nil }
-    var canOmit: Bool { clipAroundSelection != nil }
+    var canOmit: Bool { selection != nil }
+    var canRestore: Bool { restoreTarget != nil }
+
+    /// What ⇧⌫ restores: the selection, or with only a caret, the whole struck-out
+    /// run the caret is on.
+    private var restoreTarget: ClosedRange<Int>? {
+        if let s = selection { return s }
+        let runs = project.omissionMap().runs()
+        for w in [caretWord, wordBeforeCaret].compactMap({ $0 }) {
+            if let r = runs.first(where: { $0.contains(w) }) { return r }
+        }
+        return nil
+    }
     var canExtend: Bool { selection != nil && selectedClip != nil && clipAroundSelection?.id != selectedClip }
 
     private var clipOverlappingSelection: Clip? {
@@ -339,20 +422,24 @@ final class DocumentModel {
         }
     }
 
+    /// Omits the selected words, inside a clip or not. Outside clips they stay struck
+    /// out, and a clip made over them later leaves them out. Previews only inside a clip.
     func omitSelection() {
-        guard let s = selection, let c = clipAroundSelection else { return hint() }
-        previewEdit(of: c.id, cue: span(of: s).map { .around(from: $0.end, to: $0.end) })
-        if !perform("Omit", { try $0.omit(words: s, in: c.id) }) { refreshPreview() }
+        guard let s = selection else { return hint() }
+        if let c = clipAroundSelection { previewEdit(of: c.id, cue: span(of: s).map { .around(from: $0.end, to: $0.end) }) }
+        if !perform("Omit", { try $0.omit(words: s) }) { refreshPreview() }
     }
 
     func restoreSelection() {
-        guard let s = selection, let c = clipAroundSelection else { return hint() }
-        previewEdit(of: c.id, cue: span(of: s).map { .around(from: $0.start, to: $0.end) })
-        if !perform("Restore", { try $0.restore(words: s, in: c.id) }) { refreshPreview() }
+        guard let s = restoreTarget else { return hint() }
+        if let c = project.clip(containingWordAt: s.lowerBound), project.clip(containingWordAt: s.upperBound)?.id == c.id {
+            previewEdit(of: c.id, cue: span(of: s).map { .around(from: $0.start, to: $0.end) })
+        }
+        if !perform("Restore", { try $0.restore(words: s) }) { refreshPreview() }
     }
 
     private func hint() {
-        flash(selection == nil ? "Select some words first." : "Select words inside a single clip.")
+        flash("Select some words first.")
         NSSound.beep()
     }
 
@@ -413,6 +500,7 @@ final class DocumentModel {
     /// Selects a clip: it becomes the preview's clip and its band is emphasised.
     func select(clip id: ClipID?, reveal: Bool = false, seekSource: Bool = false) {
         selectedClip = id
+        shelfSelection = id.map { [$0] } ?? []
         refreshPreview()
         guard reveal || seekSource, let id, let clip = project.clip(id), let r = project.indexRange(of: clip) else { return }
         if reveal { revealWord(r.lowerBound) }

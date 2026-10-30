@@ -8,9 +8,9 @@ import Save
 /// Load and Save work on the package *URL* (the source path is relative to it, and
 /// words.tsv / cache/ stay in place), which FileDocument never sees.
 ///
-/// Edits made outside the app (the text editor workflow) are picked up when the
-/// package changes or the window comes forward: an unedited document reloads,
-/// one with unsaved changes asks first.
+/// Edits made outside the app (a text editor, git, Drive sync, another AI) are noticed
+/// when the package changes, when the window comes forward, and before every save:
+/// the two versions' clips are shown side by side and the user loads or keeps.
 final class ProjectDocument: NSDocument {
     let model = DocumentModel()
     private var transcriptStamp: FileStamp?
@@ -36,6 +36,7 @@ final class ProjectDocument: NSDocument {
         addWindowController(controller)
         NotificationCenter.default.addObserver(self, selector: #selector(windowDidBecomeKey),
                                                name: NSWindow.didBecomeKeyNotification, object: window)
+        installDeleteKey(for: window)
     }
 
     // MARK: Load / Save
@@ -51,6 +52,14 @@ final class ProjectDocument: NSDocument {
     }
 
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType) throws {
+        // Last line of defence: never overwrite a change on disk nobody has reviewed
+        // (every save path offers the comparison first; this catches any that don't).
+        if url.standardizedFileURL == fileURL?.standardizedFileURL, changedOnDisk {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError, userInfo: [
+                NSLocalizedDescriptionKey: "transcript.md was changed on disk, so OctoEdit didn’t overwrite it.",
+                NSLocalizedRecoverySuggestionErrorKey: "Switch away from OctoEdit and back to compare the two versions.",
+            ])
+        }
         let fm = FileManager.default
         if let old = fileURL, old.standardizedFileURL != url.standardizedFileURL {
             // Save As: carry words.tsv, the Zoom transcript and the cache along.
@@ -83,9 +92,9 @@ final class ProjectDocument: NSDocument {
     private func autosaveNow() {
         autosaveTimer = nil
         guard isDocumentEdited, let url = fileURL, let type = fileType, !asking else { return }
-        // Never overwrite edits made in a text editor: ask instead (as on window focus).
-        if FileStamp(Self.transcriptURL(url)) != transcriptStamp {
-            checkForExternalChange()
+        // Never overwrite a change made elsewhere: offer the comparison instead.
+        if changedOnDisk {
+            offerDiskVersion { [weak self] loaded in if !loaded { self?.autosaveNow() } }
             return
         }
         save(to: url, ofType: type, for: .saveOperation) { [weak self] error in
@@ -96,25 +105,36 @@ final class ProjectDocument: NSDocument {
     }
 
     /// Closing (or quitting, or opening another project) saves pending changes without
-    /// asking. Only when transcript.md was edited elsewhere since the last save does the
-    /// usual question appear, so neither version is overwritten silently.
+    /// asking. If transcript.md changed on disk meanwhile, the comparison comes first:
+    /// load the disk version (and close), or keep OctoEdit's (save it, then close).
     override func canClose(withDelegate delegate: Any, shouldClose selector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
         MainActor.assumeIsolated { model.endTextEditing() }   // a text session is applied, not lost
-        guard isDocumentEdited, let url = fileURL, let type = fileType,
-              FileStamp(Self.transcriptURL(url)) == transcriptStamp else {
+        guard isDocumentEdited, let url = fileURL, let type = fileType else {
             return super.canClose(withDelegate: delegate, shouldClose: selector, contextInfo: contextInfo)
         }
         autosaveTimer?.invalidate()
         autosaveTimer = nil
-        save(to: url, ofType: type, for: .saveOperation) { [weak self] error in
+        let saveAndClose = { [weak self] in
             guard let self else { return }
-            if let error {
-                // Couldn't save: fall back to the standard question rather than lose work.
-                self.presentError(error)
-                self.askBeforeClosing(delegate, selector, contextInfo)
-                return
+            self.save(to: url, ofType: type, for: .saveOperation) { [weak self] error in
+                guard let self else { return }
+                if let error {
+                    // Couldn't save: fall back to the standard question rather than lose work.
+                    self.presentError(error)
+                    self.askBeforeClosing(delegate, selector, contextInfo)
+                    return
+                }
+                Self.reply(to: delegate, selector, document: self, shouldClose: true, contextInfo)
             }
-            Self.reply(to: delegate, selector, document: self, shouldClose: true, contextInfo)
+        }
+        if changedOnDisk {
+            offerDiskVersion { [weak self] loaded in
+                guard let self else { return }
+                if loaded { Self.reply(to: delegate, selector, document: self, shouldClose: true, contextInfo) }
+                else { saveAndClose() }
+            }
+        } else {
+            saveAndClose()
         }
     }
 
@@ -131,6 +151,8 @@ final class ProjectDocument: NSDocument {
     }
 
     override func close() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
         autosaveTimer?.invalidate()
         autosaveTimer = nil
         watcher = nil
@@ -148,24 +170,65 @@ final class ProjectDocument: NSDocument {
 
     @objc private func windowDidBecomeKey(_ note: Notification) { checkForExternalChange() }
 
+    /// transcript.md on disk differs from what OctoEdit last read or wrote.
+    private var changedOnDisk: Bool {
+        guard let url = fileURL else { return false }
+        return FileStamp(Self.transcriptURL(url)) != transcriptStamp
+    }
+
     private func checkForExternalChange() {
+        guard changedOnDisk, !asking else { return }
+        offerDiskVersion()
+    }
+
+    /// Shows OctoEdit's clips next to the version on disk and offers to load it.
+    /// `then` gets true if the disk version was loaded, false if OctoEdit's was kept.
+    private func offerDiskVersion(then: ((Bool) -> Void)? = nil) {
         guard let url = fileURL, !asking else { return }
-        let stamp = FileStamp(Self.transcriptURL(url))
-        guard stamp != transcriptStamp else { return }
-        if !isDocumentEdited {
-            reload(url)
-            return
-        }
         asking = true
+        let stamp = FileStamp(Self.transcriptURL(url))
+        let edited = isDocumentEdited
+        var disk: PackageReader.Result?
+        var problem: String?
+        do {
+            disk = try PackageReader.load(url)
+            let errors = disk!.issues.filter { $0.severity == .error }.count
+            if errors > 0 {
+                problem = "The version on disk has \(errors) error\(errors == 1 ? "" : "s"); loaded, it opens read-only until they’re fixed."
+            }
+        } catch {
+            problem = "The version on disk can’t be read: \(error)"
+        }
+        let (here, editing) = MainActor.assumeIsolated { (model.project, model.textEditing) }
+
         let alert = NSAlert()
-        alert.messageText = "transcript.md was changed by another application."
-        alert.informativeText = "Reload it and discard your unsaved changes here, or keep the version in OctoEdit (saving will overwrite the file)."
+        alert.messageText = "transcript.md was changed outside OctoEdit"
+        var info = edited
+            ? "You have unsaved changes here. Loading the version on disk discards them; keeping OctoEdit’s means its next save replaces the file on disk."
+            : "OctoEdit has no unsaved changes, so loading the version on disk loses nothing."
+        if editing { info += " Your text-editing session would be discarded too." }
+        alert.informativeText = info
+        let comparison = NSHostingView(rootView: ClipComparison(rows: ClipComparison.rows(here: here, disk: disk?.project),
+                                                                diskProblem: problem))
+        comparison.frame.size = comparison.fittingSize
+        alert.accessoryView = comparison
+        alert.addButton(withTitle: "Load Version on Disk")
         alert.addButton(withTitle: "Keep OctoEdit Version")
-        alert.addButton(withTitle: "Reload from Disk")
+        if disk == nil { alert.buttons[0].isEnabled = false }
+
         let respond: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard let self else { return }
             self.asking = false
-            if response == .alertSecondButtonReturn { self.reload(url) } else { self.transcriptStamp = stamp }
+            if response == .alertFirstButtonReturn {
+                self.reload(url)
+                then?(true)
+            } else {
+                // Keep: treat the disk version as seen, so the next save may replace it
+                // (and NSDocument doesn't raise its own "changed by another app" alarm).
+                self.transcriptStamp = stamp
+                self.fileModificationDate = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+                then?(false)
+            }
         }
         if let window = windowControllers.first?.window { alert.beginSheetModal(for: window, completionHandler: respond) }
         else { respond(alert.runModal()) }
@@ -180,6 +243,33 @@ final class ProjectDocument: NSDocument {
         }
     }
 
+    // MARK: Delete key
+
+    private var keyMonitor: Any?
+
+    /// ⌫ (or ⌦) with a clip selected deletes it, after confirming — wherever the focus is
+    /// in this window, except where ⌫ already means something: typing in a text field,
+    /// Edit Text mode, or a word selection in the transcript (⌫ omits those words).
+    private func installDeleteKey(for window: NSWindow) {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self, weak window] event in
+            guard let self, let window, event.window === window,
+                  event.keyCode == 51 || event.keyCode == 117,
+                  event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
+            let responder = window.firstResponder
+            if let text = responder as? WordTextView {
+                if text.selectedRange().length > 0 { return event }
+            } else if let text = responder as? NSTextView, text.isEditable {
+                return event
+            }
+            let handled: Bool = MainActor.assumeIsolated {
+                guard !self.model.textEditing, self.model.canEdit, self.model.selectedClip != nil else { return false }
+                self.model.confirmDeleteSelectedClip(in: window)
+                return true
+            }
+            return handled ? nil : event
+        }
+    }
+
     // MARK: Clip commands
 
     @objc func makeClip(_ sender: Any?) { MainActor.assumeIsolated { model.makeClip() } }
@@ -189,6 +279,8 @@ final class ProjectDocument: NSDocument {
     @objc func setClipStart(_ sender: Any?) { MainActor.assumeIsolated { model.setBoundaryAtPlayhead(inPoint: true) } }
     @objc func setClipEnd(_ sender: Any?) { MainActor.assumeIsolated { model.setBoundaryAtPlayhead(inPoint: false) } }
     @objc func deleteClip(_ sender: Any?) { MainActor.assumeIsolated { model.deleteClip() } }
+    @objc func mergeClips(_ sender: Any?) { MainActor.assumeIsolated { model.mergeSelectedClips() } }
+    @objc func splitClip(_ sender: Any?) { MainActor.assumeIsolated { model.splitAtCaret() } }
     @objc func inspectCut(_ sender: Any?) { MainActor.assumeIsolated { model.inspectNearest() } }
     @objc func exportClips(_ sender: Any?) { MainActor.assumeIsolated { model.showExport() } }
     @objc func suggestNames(_ sender: Any?) {
@@ -202,10 +294,18 @@ final class ProjectDocument: NSDocument {
     @objc func toggleTextEditing(_ sender: Any?) { MainActor.assumeIsolated { model.toggleTextEditing() } }
 
     /// ⌘S during a text session applies the session first, so what's saved is what you see.
+    /// ⌘S: if transcript.md changed on disk, compare first (and save only if OctoEdit's
+    /// version is kept).
     override func save(_ sender: Any?) {
         MainActor.assumeIsolated { model.endTextEditing() }
-        super.save(sender)
+        if changedOnDisk {
+            offerDiskVersion { [weak self] loaded in if !loaded { self?.saveNow(sender) } }
+        } else {
+            super.save(sender)
+        }
     }
+
+    private func saveNow(_ sender: Any?) { super.save(sender) }
 
     @objc func togglePlayPause(_ sender: Any?) { MainActor.assumeIsolated { model.togglePlay() } }
     @objc func toggleAutoPreview(_ sender: Any?) {
@@ -239,10 +339,13 @@ final class ProjectDocument: NSDocument {
             switch item.action {
             case #selector(makeClip(_:)): m.canEdit && m.canMakeClip
             case #selector(extendClip(_:)): m.canEdit && m.canExtend
-            case #selector(omitSelection(_:)), #selector(restoreSelection(_:)): transcriptFocused && m.canEdit && m.canOmit
+            case #selector(omitSelection(_:)): transcriptFocused && m.canEdit && m.canOmit
+            case #selector(restoreSelection(_:)): transcriptFocused && m.canEdit && m.canRestore
             case #selector(setClipStart(_:)), #selector(setClipEnd(_:)):
                 transcriptFocused && m.canEdit && m.selectedClip != nil && m.currentWord != nil
             case #selector(deleteClip(_:)): m.canEdit && m.selectedClip != nil
+            case #selector(mergeClips(_:)): m.canEdit && m.canMerge
+            case #selector(splitClip(_:)): m.canEdit && m.canSplit
             case #selector(inspectCut(_:)): m.canEdit && !m.project.clips.isEmpty
             case #selector(exportClips(_:)): !m.project.clips.isEmpty && !m.loadErrors && !m.sourceMissing
             case #selector(suggestNames(_:)): m.canEdit && m.selectedClip != nil

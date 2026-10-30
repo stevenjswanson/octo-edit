@@ -94,7 +94,8 @@ func toks(_ s: String) -> [String] { s.split(separator: " ").map { Aligner.norma
         try p.replaceText(ofParagraph: ParagraphID(1), with: ["fy", "27", "the", "campus", "is", "um"])
         let c = p.clip(id)!
         #expect(p.indexRange(of: c) == 0...4)        // start moved to "fy"; end before the gone "flat"
-        #expect(c.segments.count == 1)                // the "um" omission no longer sits inside
+        #expect(c.segments.count == 1)                // the "um" omission no longer sits inside…
+        #expect(p.omissions.map { p.indexRange(of: $0)! } == [5...5])   // …but "um" stays omitted
         #expect(c.segments[0].inPoint.offset == nil)  // its anchor word was removed
     }
 
@@ -105,8 +106,27 @@ func toks(_ s: String) -> [String] { s.split(separator: " ").map { Aligner.norma
         #expect(p.indexRange(of: p.clip(id)!) == 0...6)
     }
 
+    @Test func omissionOutsideAClipFollowsCorrections() throws {
+        var (p, id) = try project()
+        try p.deleteClip(id)
+        try p.replaceText(ofParagraph: ParagraphID(1), with: ["for", "FY27", "the", "campus", "is", "umm", "flat"])
+        #expect(p.omissions.map { p.indexRange(of: $0)! } == [5...5])
+    }
+
     @Test func emptyParagraphIsRefused() throws {
         var (p, _) = try project()
         #expect(throws: EditError.emptyParagraph) { try p.replaceText(ofParagraph: ParagraphID(1), with: []) }
+    }
+}
+
+@Suite struct PhraseTests {
+    @Test func findsPhrasesIgnoringCaseAndPunctuation() {
+        let texts = ["Um,", "because", "I", "tell", "my", "teams,", "if", "I", "tell", "you"]
+        let words = texts.enumerated().map { Word(id: WordID($0), text: $1, paragraph: ParagraphID(0)) }
+        let p = Project(source: "x", paragraphs: [Paragraph(id: ParagraphID(0))], words: words)
+        #expect(p.occurrences(of: "um because I tell", in: 0...9) == [0])
+        #expect(p.occurrences(of: "I tell", in: 0...9) == [2, 7])
+        #expect(p.occurrences(of: "I tell", in: 4...9) == [7])
+        #expect(p.occurrences(of: "nothing here", in: 0...9).isEmpty)
     }
 }

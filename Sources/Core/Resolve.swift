@@ -12,6 +12,32 @@ public struct ResolvedSegment: Equatable, Sendable {
     }
 }
 
+/// Every omitted word in the project, inside clips and out, with the explicit offsets
+/// on the cuts around each run. Runs are maximal: adjacent omitted words form one run.
+public struct OmissionMap: Equatable, Sendable {
+    public var omitted: [Bool]
+    /// Offset of the cut before a run (from the end of the word before it), by the run's first word.
+    public var cutOffset: [Int: Seconds] = [:]
+    /// Offset where kept words resume after a run (from the start of the word after it), by the run's last word.
+    public var resumeOffset: [Int: Seconds] = [:]
+
+    public init(count: Int) { omitted = Array(repeating: false, count: count) }
+
+    /// Maximal runs of omitted words.
+    public func runs() -> [ClosedRange<Int>] {
+        var out: [ClosedRange<Int>] = []
+        var i = 0
+        while i < omitted.count {
+            guard omitted[i] else { i += 1; continue }
+            var j = i
+            while j + 1 < omitted.count, omitted[j + 1] { j += 1 }
+            out.append(i...j)
+            i = j + 1
+        }
+        return out
+    }
+}
+
 extension Project {
     /// Offset actually applied to a boundary: explicit, else the role default
     /// (pre-pad before a clip's first word, post-pad after its last, 0 at omits).
@@ -27,6 +53,37 @@ extension Project {
     public func indexRange(of segment: Segment) -> ClosedRange<Int>? {
         guard let a = index(of: segment.inPoint.word), let b = index(of: segment.outPoint.word), a <= b else { return nil }
         return a...b
+    }
+
+    public func indexRange(of omission: Omission) -> ClosedRange<Int>? {
+        guard let a = index(of: omission.first), let b = index(of: omission.last), a <= b else { return nil }
+        return a...b
+    }
+
+    /// All omissions, from the clips' gaps and the omissions outside clips. Inside a
+    /// clip's range its segments decide.
+    public func omissionMap() -> OmissionMap {
+        var m = OmissionMap(count: words.count)
+        for o in omissions {
+            guard let r = indexRange(of: o) else { continue }
+            for i in r { m.omitted[i] = true }
+            m.cutOffset[r.lowerBound] = o.cutOffset
+            m.resumeOffset[r.upperBound] = o.resumeOffset
+        }
+        for clip in clips {
+            guard let range = indexRange(of: clip) else { continue }
+            for i in range { m.omitted[i] = true }
+            m.cutOffset = m.cutOffset.filter { !range.contains($0.key) }
+            m.resumeOffset = m.resumeOffset.filter { !range.contains($0.key) }
+            let ranges = clip.segments.map { indexRange(of: $0) }
+            for r in ranges.compactMap({ $0 }) { for i in r { m.omitted[i] = false } }
+            for k in 0..<max(ranges.count - 1, 0) {
+                guard let a = ranges[k], let b = ranges[k + 1], a.upperBound + 1 < b.lowerBound else { continue }
+                m.cutOffset[a.upperBound + 1] = clip.segments[k].outPoint.offset
+                m.resumeOffset[b.lowerBound - 1] = clip.segments[k + 1].inPoint.offset
+            }
+        }
+        return m
     }
 
     /// Word-index range from a clip's first in-point to its last out-point.
@@ -131,6 +188,17 @@ extension Project {
                 issues.append(Issue(.warning, "\(label) has no timed words and will produce no video"))
             }
             if let name = clip.name { names[slugify(name), default: 0] += 1 }
+        }
+        var clipped = Set<Int>()
+        for clip in clips { if let r = indexRange(of: clip) { clipped.formUnion(r) } }
+        for o in omissions {
+            guard let r = indexRange(of: o) else { issues.append(Issue(.error, "an omission has lost its words")); continue }
+            if r.contains(where: { clipped.contains($0) }) {
+                issues.append(Issue(.error, "an omission outside the clips overlaps a clip"))
+            }
+            if r.contains(where: { paragraph(words[$0].paragraph)?.zoomOnly ?? false }) {
+                issues.append(Issue(.error, "an omission is in Zoom-only text"))
+            }
         }
         for (slug, count) in names where count > 1 {
             issues.append(Issue(.warning, "\(count) clips share the name slug \"\(slug)\"; later ones get -2, -3, …"))

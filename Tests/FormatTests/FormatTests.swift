@@ -203,10 +203,44 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         #expect(parse(broken, []).project.clips.map(\.name).contains("Hiring plan"))
     }
 
-    @Test func outsideClipReportedOncePerFence() {
-        let text = handWritten.replacingOccurrences(of: "Welcome everyone.", with: "~~Welcome everyone.~~")
-        let errors = parse(text, []).issues.filter { $0.message.contains("must be inside a clip") }
-        #expect(errors.count == 1)
+    @Test func omissionOutsideAClipLoadsAndRoundTrips() throws {
+        let text = handWritten.replacingOccurrences(of: "Welcome everyone.", with: "~~{+30ms} Welcome everyone. {-20ms}~~")
+        let r = parse(text)
+        #expect(!r.hasErrors, "\(r.issues)")
+        let p = r.project
+        #expect(p.omissions.count == 1)
+        #expect(p.indexRange(of: p.omissions[0]) == word(p, "Welcome")...word(p, "everyone."))
+        #expect(p.omissions[0].cutOffset == 0.03 && p.omissions[0].resumeOffset == -0.02)
+        let written = TranscriptWriter.write(p)
+        #expect(written.contains("~~{+30ms} Welcome everyone. {-20ms}~~ {clip \"Welcome\" -200ms} Thanks"))
+        #expect(parse(written).project == p)
+    }
+
+    @Test func omissionAtAClipEdgeEndsUpOutsideIt() throws {
+        // A fence right after {clip} just shortens the clip; the words stay omitted.
+        let text = handWritten.replacingOccurrences(of: "{clip \"Welcome\" -200ms} Thanks for", with: "{clip \"Welcome\" -200ms} ~~Thanks for~~")
+        let p = parse(text).project
+        let welcome = p.clips[0]
+        #expect(p.indexRange(of: welcome)!.lowerBound == word(p, "making"))
+        #expect(welcome.segments[0].inPoint.offset == nil)
+        #expect(p.omissions.map { p.indexRange(of: $0)! } == [word(p, "Thanks")...word(p, "for")])
+        #expect(TranscriptWriter.write(p).contains("~~Thanks for~~ {clip \"Welcome\"} making"))
+    }
+
+    @Test func clipMadeOverAnOmissionKeepsItAfterSaving() throws {
+        var p = parse(handWritten).project
+        try p.deleteClip(p.clips[0].id)
+        let t = word(p, "time")
+        try p.omit(words: t...t)
+        #expect(p.omissions.count == 1)
+        let reloaded = parse(TranscriptWriter.write(p)).project
+        #expect(reloaded.omissions.map { reloaded.indexRange(of: $0)! } == [t...t])
+
+        var q = reloaded
+        try q.makeClip(words: word(q, "Thanks")...word(q, "Wednesday."), name: "Again")
+        let q2 = parse(TranscriptWriter.write(q)).project
+        #expect(q2.omissions.isEmpty)
+        #expect(q2.omittedRanges(of: q2.clips[0]) == [t...t])
     }
 
     @Test func strayNoteIsKeptAndWarned() {
@@ -314,5 +348,42 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         try PackageWriter.save(q, to: pkg)
         #expect(try String(contentsOf: pkg.appendingPathComponent("words.tsv"), encoding: .utf8) == before)
         #expect(FileManager.default.fileExists(atPath: pkg.appendingPathComponent(".gitignore").path))
+    }
+}
+
+@Suite struct MergedClipRoundTripTests {
+    /// A merged clip (gaps become omissions) saves and reloads to the same cuts.
+    @Test func mergedClipSurvivesSaveAndLoad() throws {
+        let p1 = ParagraphID(1), p2 = ParagraphID(2)
+        let words = (0..<12).map { i in
+            Word(id: WordID(i + 1), text: "w\(i)", start: Double(i), end: Double(i) + 0.8, paragraph: i < 6 ? p1 : p2)
+        }
+        var p = Project(source: "x.mp4", paragraphs: [Paragraph(id: p1), Paragraph(id: p2)], words: words)
+        let a = try p.makeClip(words: 1...2, name: "First")
+        let b = try p.makeClip(words: 4...8, name: "Second")
+        try p.omit(words: 6...6, in: b)
+        try p.setOffset(clip: a, segment: 0, inPoint: false, 0.3)   // First's adjusted end
+        let m = try p.mergeClips([a, b])
+        let ranges = p.clip(m)!.segments.map { p.indexRange(of: $0)! }
+
+        let timed = words.map { TimedWord(text: $0.text, start: $0.start!, end: $0.end!) }
+        let text = TranscriptWriter.write(p)
+        let back = TranscriptReader.parse(text, timedWords: timed)
+        #expect(back.issues.filter { $0.severity == .error }.isEmpty, "\(back.issues)")
+        let q = back.project
+        #expect(q.clips.count == 1)
+        #expect(q.clips[0].segments.map { q.indexRange(of: $0)! } == ranges)
+        #expect(text.contains("{clip \"First\"} w1 w2 ~~{+300ms} w3~~ w4 w5"))
+        #expect(q.clips[0].segments[0].outPoint.offset == 0.3)
+    }
+}
+
+@Suite struct AnnotationGuideTests {
+    /// `octoedit guide` must print exactly the doc in the repo.
+    @Test func embeddedGuideMatchesTheDoc() throws {
+        let doc = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("docs/clip-annotation-for-ai.md")
+        let text = try String(contentsOf: doc, encoding: .utf8)
+        #expect(AnnotationGuide.text + "\n" == text, "run Tools/sync_guide.py after editing the doc")
     }
 }

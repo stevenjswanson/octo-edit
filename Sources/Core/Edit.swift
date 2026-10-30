@@ -9,6 +9,7 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
     case zoomOnlyText
     case notSplittable
     case emptyParagraph
+    case notConsecutive
 
     public var description: String {
         switch self {
@@ -19,7 +20,8 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
         case .wouldOmitEverything: "omitting this would leave the clip empty"
         case .zoomOnlyText: "clip boundaries and omissions can't be placed in Zoom-only text (it isn't in the recording)"
         case .notSplittable: "the paragraph can't be split there"
-        case .emptyParagraph: "a paragraph can't be left empty (omit its words in a clip instead)"
+        case .notConsecutive: "only consecutive clips (with no other clip between them) can be merged"
+        case .emptyParagraph: "a paragraph can't be left empty (omit its words instead)"
         }
     }
 }
@@ -51,42 +53,60 @@ extension Project {
         return i
     }
 
-    /// Rebuilds a clip's segments from a per-word kept mask over `range`,
-    /// keeping explicit offsets on boundaries whose anchor word is unchanged.
-    private func rebuiltSegments(_ clip: Clip, range: ClosedRange<Int>, kept: [Bool]) -> [Segment] {
-        var inOffsets: [WordID: Seconds] = [:]
-        var outOffsets: [WordID: Seconds] = [:]
-        for s in clip.segments {
-            if let o = s.inPoint.offset { inOffsets[s.inPoint.word] = o }
-            if let o = s.outPoint.offset { outOffsets[s.outPoint.word] = o }
-        }
-        var segments: [Segment] = []
-        var runStart: Int?
-        for (k, i) in range.enumerated() {
-            if kept[k] {
-                if runStart == nil { runStart = i }
-            }
-            let runEnds = !kept[k] || i == range.upperBound
-            if runEnds, let a = runStart {
-                let b = kept[k] ? i : i - 1
-                let inID = words[a].id, outID = words[b].id
-                segments.append(Segment(inPoint: Boundary(word: inID, offset: inOffsets[inID]),
-                                        outPoint: Boundary(word: outID, offset: outOffsets[outID])))
-                runStart = nil
-            }
-        }
-        return segments
+    /// A clip's word range and explicit edge offsets, as `layOut` takes them.
+    private struct Span {
+        var clip: Clip
+        var range: ClosedRange<Int>
+        var start: Seconds?
+        var end: Seconds?
     }
 
-    private func keptMask(_ clip: Clip, over range: ClosedRange<Int>) -> [Bool] {
-        var kept = Array(repeating: false, count: range.count)
-        for seg in clip.segments {
-            guard let r = indexRange(of: seg) else { continue }
-            for i in r where range.contains(i) { kept[i - range.lowerBound] = true }
+    /// The clips as spans, in document order.
+    private func spans() throws -> [Span] {
+        try clips.map { c in
+            guard let r = indexRange(of: c) else { throw EditError.invalidRange }
+            return Span(clip: c, range: r, start: c.segments.first?.inPoint.offset, end: c.segments.last?.outPoint.offset)
         }
-        return kept
     }
 
+    /// Rebuilds every clip's segments, and the omissions outside clips, from `map`.
+    /// `spans` are the clips in document order, not overlapping. A clip that would start
+    /// or end on omitted words shrinks to its first and last kept words (those words stay
+    /// omitted, outside it); a clip edge keeps its explicit offset only where it didn't move.
+    private mutating func layOut(_ spans: [Span], _ map: OmissionMap) throws {
+        var laid: [Clip] = []
+        var covered = Array(repeating: false, count: words.count)
+        for s in spans {
+            guard let lo = s.range.first(where: { !map.omitted[$0] }),
+                  let hi = s.range.last(where: { !map.omitted[$0] }) else { throw EditError.wouldOmitEverything }
+            var segments: [Segment] = []
+            var i = lo
+            while i <= hi {
+                var j = i
+                while j < hi, !map.omitted[j + 1] { j += 1 }
+                let inOffset = i == lo ? (lo == s.range.lowerBound ? s.start : nil) : map.resumeOffset[i - 1]
+                let outOffset = j == hi ? (hi == s.range.upperBound ? s.end : nil) : map.cutOffset[j + 1]
+                segments.append(Segment(inPoint: Boundary(word: words[i].id, offset: inOffset),
+                                        outPoint: Boundary(word: words[j].id, offset: outOffset)))
+                i = j + 1
+                while i <= hi, map.omitted[i] { i += 1 }
+            }
+            try checkPlaceable(segments)
+            var clip = s.clip
+            clip.segments = segments
+            laid.append(clip)
+            for k in lo...hi { covered[k] = true }
+        }
+        // A run never straddles a clip edge (clips start and end on kept words).
+        omissions = map.runs().filter { !covered[$0.lowerBound] }.map {
+            Omission(first: words[$0.lowerBound].id, last: words[$0.upperBound].id,
+                     cutOffset: map.cutOffset[$0.lowerBound], resumeOffset: map.resumeOffset[$0.upperBound])
+        }
+        clips = laid
+    }
+
+    /// Makes a clip of words `r`. Words in `r` that were omitted stay omitted; if `r`
+    /// starts or ends with omitted words, the clip starts or ends at the nearest kept word.
     @discardableResult
     public mutating func makeClip(words r: ClosedRange<Int>, name: String? = nil) throws -> ClipID {
         try checkRange(r)
@@ -94,78 +114,137 @@ extension Project {
             throw EditError.overlapsClip(other.id)
         }
         let id = ClipID((clips.map(\.id.raw).max() ?? 0) + 1)
-        let clip = Clip(id: id, name: name, segments: [
-            Segment(inPoint: Boundary(word: words[r.lowerBound].id), outPoint: Boundary(word: words[r.upperBound].id)),
-        ])
-        try checkPlaceable(clip.segments)
-        let insertAt = clips.firstIndex { (indexRange(of: $0)?.lowerBound ?? .max) > r.upperBound } ?? clips.count
-        clips.insert(clip, at: insertAt)
+        var all = try spans()
+        let at = all.firstIndex { $0.range.lowerBound > r.upperBound } ?? all.count
+        all.insert(Span(clip: Clip(id: id, name: name, segments: []), range: r), at: at)
+        try layOut(all, omissionMap())
         return id
     }
 
+    /// Merges two or more consecutive clips (no other clip between them) into one that
+    /// runs from the first clip's start to the last clip's end. The stretches between
+    /// them become omissions (clips that touch simply join); omissions inside the clips
+    /// are kept. Every explicit offset is kept too: a clip's adjusted end becomes the
+    /// start of the omission after it, and the next clip's adjusted start becomes that
+    /// omission's end. The merged clip takes the first clip's name (or the first name any
+    /// of them has) and all their notes. Returns the merged clip's id (the first clip's).
+    @discardableResult
+    public mutating func mergeClips(_ ids: [ClipID]) throws -> ClipID {
+        let indices = try Set(ids).map { try clipIndex($0) }.sorted()
+        guard indices.count >= 2 else { throw EditError.invalidRange }
+        guard indices.last! - indices.first! == indices.count - 1 else { throw EditError.notConsecutive }
+        var all = try spans()
+        let parts = indices.map { all[$0] }
+        var map = omissionMap()
+        for (a, b) in zip(parts, parts.dropFirst()) where a.range.upperBound + 1 < b.range.lowerBound {
+            let gap = (a.range.upperBound + 1)...(b.range.lowerBound - 1)
+            for i in gap { map.omitted[i] = true }
+            if let o = a.end { map.cutOffset[gap.lowerBound] = o }
+            if let o = b.start { map.resumeOffset[gap.upperBound] = o }
+        }
+        var merged = parts[0].clip
+        merged.name = parts.lazy.compactMap(\.clip.name).first
+        merged.notes = parts.map(\.clip.notes).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        merged.suggestions = []
+        all.replaceSubrange(indices.first!...indices.last!, with: [
+            Span(clip: merged, range: parts.first!.range.lowerBound...parts.last!.range.upperBound,
+                 start: parts.first!.start, end: parts.last!.end),
+        ])
+        try layOut(all, map)
+        return merged.id
+    }
+
+    /// Splits a clip in two so the second starts at word `w` (the first ends at the last
+    /// kept word before it). Each part keeps its own omissions and their offsets; an
+    /// omission that `w` falls inside or next to ends up between the two clips. The
+    /// original start and end keep their offsets; the two new edges get the default
+    /// pads. The first part keeps the name, notes and suggestions; the second is unnamed.
+    /// Returns the second clip's id.
+    @discardableResult
+    public mutating func splitClip(_ id: ClipID, atWord w: Int) throws -> ClipID {
+        let ci = try clipIndex(id)
+        var all = try spans()
+        let s = all[ci]
+        guard w > s.range.lowerBound, w <= s.range.upperBound else { throw EditError.invalidRange }
+        let newID = ClipID((clips.map(\.id.raw).max() ?? 0) + 1)
+        all[ci] = Span(clip: s.clip, range: s.range.lowerBound...(w - 1), start: s.start, end: nil)
+        all.insert(Span(clip: Clip(id: newID, segments: []), range: w...s.range.upperBound, start: nil, end: s.end), at: ci + 1)
+        try layOut(all, omissionMap())
+        return newID
+    }
+
+    /// Deletes a clip. Its words stay in the transcript, and its omissions stay omitted.
     public mutating func deleteClip(_ id: ClipID) throws {
-        clips.remove(at: try clipIndex(id))
+        let ci = try clipIndex(id)
+        let map = omissionMap()
+        var all = try spans()
+        all.remove(at: ci)
+        try layOut(all, map)
     }
 
-    /// Omits words inside a clip, splitting segments as needed.
+    /// Omits words wherever they are. Inside a clip they are cut out of it (omitting a
+    /// clip's first or last words shrinks the clip); outside every clip they stay
+    /// omitted, so a clip later made over them leaves them out.
+    public mutating func omit(words r: ClosedRange<Int>) throws {
+        try checkRange(r)
+        if r.contains(where: { isZoomOnly(wordAt: $0) }) { throw EditError.zoomOnlyText }
+        var map = omissionMap()
+        for i in r { map.omitted[i] = true }
+        try layOut(try spans(), map)
+    }
+
+    /// Puts omitted words back, inside clips or outside them.
+    public mutating func restore(words r: ClosedRange<Int>) throws {
+        try checkRange(r)
+        var map = omissionMap()
+        for i in r { map.omitted[i] = false }
+        try layOut(try spans(), map)
+    }
+
+    private func checkInside(_ r: ClosedRange<Int>, _ id: ClipID) throws {
+        try checkRange(r)
+        guard let range = indexRange(of: clips[try clipIndex(id)]), range.contains(r.lowerBound), range.contains(r.upperBound) else {
+            throw EditError.outsideClip
+        }
+    }
+
+    /// Omits words that must lie inside clip `id`.
     public mutating func omit(words r: ClosedRange<Int>, in id: ClipID) throws {
-        try checkRange(r)
-        let ci = try clipIndex(id)
-        guard let range = indexRange(of: clips[ci]), range.contains(r.lowerBound), range.contains(r.upperBound) else {
-            throw EditError.outsideClip
-        }
-        var kept = keptMask(clips[ci], over: range)
-        for i in r { kept[i - range.lowerBound] = false }
-        guard kept.contains(true) else { throw EditError.wouldOmitEverything }
-        let segments = rebuiltSegments(clips[ci], range: range, kept: kept)
-        try checkPlaceable(segments)
-        clips[ci].segments = segments
+        try checkInside(r, id)
+        try omit(words: r)
     }
 
-    /// Restores previously omitted words inside a clip.
+    /// Restores words that must lie inside clip `id`.
     public mutating func restore(words r: ClosedRange<Int>, in id: ClipID) throws {
-        try checkRange(r)
-        let ci = try clipIndex(id)
-        guard let range = indexRange(of: clips[ci]), range.contains(r.lowerBound), range.contains(r.upperBound) else {
-            throw EditError.outsideClip
-        }
-        var kept = keptMask(clips[ci], over: range)
-        for i in r { kept[i - range.lowerBound] = true }
-        let segments = rebuiltSegments(clips[ci], range: range, kept: kept)
-        try checkPlaceable(segments)
-        clips[ci].segments = segments
+        try checkInside(r, id)
+        try restore(words: r)
     }
 
     /// Grows (or shrinks) a clip so it spans exactly `r` plus its current extent if
-    /// `r` only touches one side. Newly included words are kept.
+    /// `r` only touches one side. Newly included words keep their omissions.
     public mutating func extendClip(_ id: ClipID, toInclude r: ClosedRange<Int>) throws {
         try checkRange(r)
         let ci = try clipIndex(id)
-        guard let range = indexRange(of: clips[ci]) else { throw EditError.invalidRange }
+        var all = try spans()
+        let range = all[ci].range
         let newRange = min(range.lowerBound, r.lowerBound)...max(range.upperBound, r.upperBound)
         if let other = clips.first(where: { $0.id != id && (indexRange(of: $0)?.overlaps(newRange) ?? false) }) {
             throw EditError.overlapsClip(other.id)
         }
-        var kept = Array(repeating: true, count: newRange.count)
-        let old = keptMask(clips[ci], over: range)
-        for i in range { kept[i - newRange.lowerBound] = old[i - range.lowerBound] }
-        let firstOffset = clips[ci].segments.first?.inPoint.offset
-        let lastOffset = clips[ci].segments.last?.outPoint.offset
-        var segments = rebuiltSegments(clips[ci], range: newRange, kept: kept)
         // The clip's outer offsets follow the clip edges.
-        segments[0].inPoint.offset = firstOffset
-        segments[segments.count - 1].outPoint.offset = lastOffset
-        try checkPlaceable(segments)
-        clips[ci].segments = segments
+        all[ci].range = newRange
+        try layOut(all, omissionMap())
     }
 
     /// Moves a clip's start (`start: true`) or end to word `w`, trimming or extending
-    /// the clip. Trimming past an omission drops it with the material it's in; newly
-    /// included words are kept. The moved edge's explicit offset is cleared (it was
-    /// measured from the old word); the other edge keeps its own.
+    /// the clip. Omissions in the trimmed or newly included words stay as they are.
+    /// The moved edge's explicit offset is cleared (it was measured from the old word);
+    /// the other edge keeps its own.
     public mutating func moveClipEdge(_ id: ClipID, start: Bool, to w: Int) throws {
         let ci = try clipIndex(id)
-        guard words.indices.contains(w), let range = indexRange(of: clips[ci]) else { throw EditError.invalidRange }
+        guard words.indices.contains(w) else { throw EditError.invalidRange }
+        var all = try spans()
+        let range = all[ci].range
         let newRange: ClosedRange<Int>
         if start {
             guard w <= range.upperBound else { throw EditError.invalidRange }
@@ -177,16 +256,9 @@ extension Project {
         if let other = clips.first(where: { $0.id != id && (indexRange(of: $0)?.overlaps(newRange) ?? false) }) {
             throw EditError.overlapsClip(other.id)
         }
-        let old = keptMask(clips[ci], over: range)
-        let kept = newRange.map { range.contains($0) ? old[$0 - range.lowerBound] : true }
-        guard kept.contains(true) else { throw EditError.wouldOmitEverything }
-        let firstOffset = start ? nil : clips[ci].segments.first?.inPoint.offset
-        let lastOffset = start ? clips[ci].segments.last?.outPoint.offset : nil
-        var segments = rebuiltSegments(clips[ci], range: newRange, kept: kept)
-        segments[0].inPoint.offset = firstOffset
-        segments[segments.count - 1].outPoint.offset = lastOffset
-        try checkPlaceable(segments)
-        clips[ci].segments = segments
+        all[ci].range = newRange
+        if start { all[ci].start = nil } else { all[ci].end = nil }
+        try layOut(all, omissionMap())
     }
 
     /// Moves a segment's in- or out-point to another word inside the same clip span.
@@ -205,7 +277,16 @@ extension Project {
             throw EditError.overlapsClip(other.id)
         }
         try checkPlaceable(segs)
-        clips[ci].segments = segs
+        var p = self
+        p.clips[ci].segments = segs
+        try p.layOut(try p.spans(), p.omissionMap())
+        self = p
+    }
+
+    /// Re-derives the clips' segments and the outside omissions from the current state,
+    /// merging touching omissions and dropping outside omissions a clip now covers.
+    public mutating func normalizeOmissions() throws {
+        try layOut(try spans(), omissionMap())
     }
 
     public mutating func setOffset(clip id: ClipID, segment k: Int, inPoint: Bool, _ offset: Seconds?) throws {

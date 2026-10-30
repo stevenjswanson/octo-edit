@@ -76,13 +76,13 @@ public enum TranscriptWriter {
                 guard let range = p.indexRange(of: clip) else { continue }
                 open[range.lowerBound] = clip
                 close[range.upperBound] = clip
-                let segRanges = clip.segments.map { p.indexRange(of: $0) }
-                for k in 0..<max(clip.segments.count - 1, 0) {
-                    guard let a = segRanges[k], let b = segRanges[k + 1], a.upperBound + 1 < b.lowerBound else { continue }
-                    for i in (a.upperBound + 1)..<b.lowerBound { omitted.insert(i) }
-                    if let o = clip.segments[k].outPoint.offset { omitOpenOffset[a.upperBound + 1] = o }
-                    if let o = clip.segments[k + 1].inPoint.offset { omitCloseOffset[b.lowerBound - 1] = o }
-                }
+            }
+            // Every omission, inside clips and out (clip edges are always kept words).
+            let map = p.omissionMap()
+            for r in map.runs() {
+                omitted.formUnion(r)
+                if let o = map.cutOffset[r.lowerBound] { omitOpenOffset[r.lowerBound] = o }
+                if let o = map.resumeOffset[r.upperBound] { omitCloseOffset[r.upperBound] = o }
             }
         }
     }

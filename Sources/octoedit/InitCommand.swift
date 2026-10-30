@@ -14,6 +14,10 @@ struct InitCommand: AsyncParsableCommand {
         Transcribes the video's first audio track on this Mac (English), tightens word
         edges against the audio, and, with --zoom, takes speaker names and text from the
         Zoom transcript. Writes an un-annotated transcript.md into the package.
+        Takes about 1½ minutes per hour of video.
+
+        EXAMPLE
+          octoedit init --video seminar-4k.mp4 --zoom GMT20260928_Recording.transcript.vtt seminar.octoedit
         """
     )
 

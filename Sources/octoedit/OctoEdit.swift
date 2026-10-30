@@ -9,11 +9,35 @@ struct OctoEdit: AsyncParsableCommand {
         commandName: "octoedit",
         abstract: "Cut a recorded meeting into clips by editing its transcript.",
         discussion: """
-        Workflow: `octoedit init` creates a .octoedit package with transcript.md;
-        mark clips and omissions in transcript.md with any text editor;
-        `octoedit render` exports the clips.
+        A project is a folder ending in .octoedit. Its transcript.md holds the
+        transcript; clips are marked by inserting markers into the text. The
+        video is never changed.
+
+        WORKFLOW
+          1. octoedit init --video talk.mp4 --zoom talk.vtt talk.octoedit
+               transcribe the video; writes talk.octoedit/transcript.md
+          2. edit talk.octoedit/transcript.md: insert {clip "Title"} … {/clip} around
+               each clip, ~~ … ~~ around words to cut out of a clip
+               (the full rules: octoedit guide)
+          3. octoedit render --check --json talk.octoedit
+               validate; repeat 2–3 until "valid": true
+          4. octoedit render talk.octoedit
+               export each clip to talk.octoedit/exports/
+               as .mp4 video, .vtt captions and .md notes
+
+        FOR AI AGENTS
+          Read `octoedit guide` before editing transcript.md. Change it only by
+          inserting markers, never by changing words. Use --json for
+          machine-readable results. Results go to stdout; progress and messages
+          go to stderr.
+
+        EXIT CODES
+          0  success
+          1  transcript.md has errors, or an export failed
+          64 bad command-line arguments
+          130 cancelled (Ctrl-C); finished clips stay, nothing partial is left
         """,
-        subcommands: [InitCommand.self, RenderCommand.self, NameCommand.self]
+        subcommands: [InitCommand.self, RenderCommand.self, SplitCommand.self, NameCommand.self, GuideCommand.self]
     )
 }
 

@@ -10,7 +10,7 @@ extension Project {
     ///   does for hand edits (a word typed into silence gets none).
     /// - A clip or omission edge on a removed word moves to the nearest word on its
     ///   side; segments that collapse are dropped, and an omission whose words were
-    ///   all removed disappears.
+    ///   all removed disappears (inside a clip or outside one).
     public mutating func replaceText(ofParagraph pid: ParagraphID, with tokens: [String]) throws {
         guard !tokens.isEmpty else { throw EditError.emptyParagraph }
         guard let lo = words.firstIndex(where: { $0.paragraph == pid }) else { throw EditError.invalidRange }
@@ -18,6 +18,8 @@ extension Project {
         while hi + 1 < words.count, words[hi + 1].paragraph == pid { hi += 1 }
         let old = Array(words[lo...hi])
         guard old.map(\.text) != tokens else { return }
+        let map = omissionMap()
+        let wasOmitted = Set(words.indices.filter { map.omitted[$0] }.map { words[$0].id })
 
         let pairs = Aligner.matches(old.map { Aligner.normalize($0.text) }, tokens.map(Aligner.normalize))
         let oldTimed = old.compactMap { w -> TimedWord? in
@@ -70,6 +72,12 @@ extension Project {
                 return Segment(inPoint: a, outPoint: b)
             }
         }
+        // Omissions outside clips move the same way; an offset goes with a removed edge word.
+        omissions = omissions.compactMap { o in
+            guard let a = remap(Boundary(word: o.first, offset: o.cutOffset), inPoint: true),
+                  let b = remap(Boundary(word: o.last, offset: o.resumeOffset), inPoint: false) else { return nil }
+            return Omission(first: a.word, last: b.word, cutOffset: a.offset, resumeOffset: b.offset)
+        }
 
         var all = words
         all.replaceSubrange(lo...hi, with: replacement)
@@ -89,5 +97,14 @@ extension Project {
             clips[c].segments = segs
         }
         clips.removeAll { $0.segments.isEmpty }
+        omissions = omissions.filter { indexRange(of: $0) != nil }
+        try normalizeOmissions()
+        // Omitted words that a moved clip edge left outside the clip stay omitted.
+        var clipped = Set<Int>()
+        for c in clips { if let r = indexRange(of: c) { clipped.formUnion(r) } }
+        let stray = words.indices.filter { !clipped.contains($0) && wasOmitted.contains(words[$0].id) }
+        if !stray.isEmpty {
+            for i in stray { try? omit(words: i...i) }
+        }
     }
 }

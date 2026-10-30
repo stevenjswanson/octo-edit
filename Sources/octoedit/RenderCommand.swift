@@ -15,6 +15,23 @@ struct RenderCommand: AsyncParsableCommand {
         one video whose .md has YouTube chapters.
         Use --check to validate transcript.md without rendering, and --preview for fast
         720p <slug>.preview.mp4 versions in exports/preview/.
+
+        EXAMPLES
+          octoedit render --check seminar.octoedit           validate; list the clips
+          octoedit render --check --json seminar.octoedit    the same, as JSON
+          octoedit render seminar.octoedit --720p --supercut
+          octoedit render seminar.octoedit --clip what-makes-a-good-swe-today
+
+        --json prints one JSON object on stdout. With --check:
+          {"valid": bool, "transcript": path,
+           "issues": [{"severity", "line", "message"}],
+           "clips": [{"index", "name", "slug", "duration", "segments",
+                      "omissions", "sourceStart", "sourceEnd",
+                      "firstWords", "lastWords"}]}
+        After an export:
+          {"folder": path, "files": [{"slug", "name", "video", "captions",
+                                      "notes", "duration"}]}
+        Exit code 1 if transcript.md has errors.
         """
     )
 
@@ -42,11 +59,24 @@ struct RenderCommand: AsyncParsableCommand {
     @Flag(help: "Also join the exported clips, in order, into one <project>-supercut-4k.mp4 (with chapters in its .md).")
     var supercut = false
 
+    @Flag(help: "Print results as one JSON object on stdout (see below).")
+    var json = false
+
     func run() async throws {
         let pkg = URL(cliPath: package)
-        let loaded = try PackageReader.load(pkg)
+        let transcript = pkg.appendingPathComponent("transcript.md").path
+        let loaded: PackageReader.Result
+        do { loaded = try PackageReader.load(pkg) } catch {
+            if json { JSONReport.emit(JSONReport.Check(valid: false, transcript: transcript, error: "\(error)", issues: [], clips: [])) }
+            throw error
+        }
         let p = loaded.project
-        Console.issues(loaded.issues, file: pkg.appendingPathComponent("transcript.md").path)
+        if json, check || loaded.hasErrors {
+            JSONReport.emit(JSONReport.check(loaded, transcript: transcript, only: clips))
+            if loaded.hasErrors { throw ExitCode.failure }
+            if check { return }
+        }
+        if !json { Console.issues(loaded.issues, file: transcript) }
         if loaded.hasErrors { throw ExitCode.failure }
 
         let slugs = p.slugs()
@@ -60,6 +90,7 @@ struct RenderCommand: AsyncParsableCommand {
             selected = p.clips.filter { clips.contains(slugs[$0.id]!) }
         }
         if selected.isEmpty {
+            if json { JSONReport.emit(JSONReport.Export(folder: nil, files: [])) }
             Console.note("No clips are marked yet. Add {clip \"Name\"} … {/clip} around text in transcript.md.")
             return
         }
@@ -81,6 +112,7 @@ struct RenderCommand: AsyncParsableCommand {
         let options = Renderer.Options(codec: codec, preview: preview, resolution: hd720 ? .hd720 : .full)
         let preview = preview
         let supercut = supercut
+        let json = json
 
         let work = Task { () -> [Renderer.Rendered] in
             var done: [Renderer.Rendered] = []
@@ -88,7 +120,7 @@ struct RenderCommand: AsyncParsableCommand {
                 let label = "[\(n + 1)/\(selected.count)] \(slugs[clip.id]!)"
                 let r = try await renderer.render(clip, into: outDir, options: options) { Console.progress(label, $0) }
                 done.append(r)
-                print(r.file.path)
+                if !json { print(r.file.path) }
             }
             if supercut {
                 // Joined from the clips just exported: no second encode.
@@ -97,7 +129,7 @@ struct RenderCommand: AsyncParsableCommand {
                     Console.progress("[supercut] \(slug)", $0)
                 }
                 done.append(r)
-                print(r.file.path)
+                if !json { print(r.file.path) }
             }
             return done
         }
@@ -111,6 +143,7 @@ struct RenderCommand: AsyncParsableCommand {
 
         do {
             let done = try await work.value
+            if json { JSONReport.emit(JSONReport.export(done, folder: outDir)) }
             Console.note("Exported \(done.count) clip\(done.count == 1 ? "" : "s") to \(outDir.path)")
         } catch is CancellationError {
             Console.note("Cancelled. Clips that finished are in \(outDir.path); nothing partial was left behind.")

@@ -315,7 +315,11 @@ struct TranscriptView: NSViewRepresentable {
             guard !settingSelection, let textView else { return }
             if editing { updateTypingAttributes(textView); return }
             let r = textView.selectedRange()
-            if !wordRanges.isEmpty { model.caretWord = min(firstWord(endingAfter: r.location), wordRanges.count - 1) }
+            if !wordRanges.isEmpty {
+                let w = min(firstWord(endingAfter: r.location), wordRanges.count - 1)
+                model.caretWord = w
+                model.wordBeforeCaret = r.length == 0 && w > 0 && NSMaxRange(wordRanges[w - 1]) == r.location ? w - 1 : nil
+            }
             model.selection = r.length == 0 ? nil : words(in: r)
         }
 
@@ -738,6 +742,8 @@ final class WordTextView: NSTextView {
         case (51, .shift, _), (117, .shift, _): #selector(ProjectDocument.restoreSelection(_:))
         case (_, [], "i"): #selector(ProjectDocument.setClipStart(_:))
         case (_, [], "o"): #selector(ProjectDocument.setClipEnd(_:))
+        case (36, [], _) where selectedRange().length > 0, (76, [], _) where selectedRange().length > 0:
+            #selector(ProjectDocument.makeClip(_:))   // Return: a new clip from the selected words
         case (49, [], _): #selector(ProjectDocument.togglePlayPause(_:))
         default: nil
         }
@@ -765,6 +771,16 @@ final class WordTextView: NSTextView {
             }
         }
         if editing { return super.menu(for: event) }
+        // Right-clicking outside the selection puts the caret there (and focuses the
+        // transcript), so the menu acts on what was clicked: e.g. Restore on a strike.
+        if let storage = textStorage, storage.length > 0 {
+            let i = characterIndexForInsertion(at: point)
+            let sel = selectedRange()
+            if !(sel.length > 0 && i >= sel.location && i <= NSMaxRange(sel)) {
+                window?.makeFirstResponder(self)
+                setSelectedRange(NSRange(location: min(i, storage.length), length: 0))
+            }
+        }
         let menu = NSMenu()
         for item in MainMenu.clipItems() { menu.addItem(item) }
         menu.addItem(.separator())
@@ -801,16 +817,16 @@ enum TranscriptText {
             .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: headerStyle,
         ]
 
-        // Clip membership and omissions, by word index.
+        // Clip membership and omissions (inside clips and out), by word index.
         var clipOf = [Int: Int]()          // word index → clip ordinal
-        var omitted = Set<Int>()
+        let omittedMap = p.omissionMap().omitted
+        func isOmitted(_ k: Int) -> Bool { k < omittedMap.count && omittedMap[k] }
         var opens = [Int: (Int, Clip)](), closes = [Int: (Int, Clip)]()
         for (n, clip) in p.clips.enumerated() {
             guard let r = p.indexRange(of: clip) else { continue }
             for i in r { clipOf[i] = n }
             opens[r.lowerBound] = (n, clip)
             closes[r.upperBound] = (n, clip)
-            for o in p.omittedRanges(of: clip) { omitted.formUnion(o) }
         }
         let slugs = p.slugs()
         let selectedOrdinal = selectedClip.flatMap { id in p.clips.firstIndex { $0.id == id } }
@@ -859,7 +875,7 @@ enum TranscriptText {
                     attrs[.foregroundColor] = NSColor.tertiaryLabelColor
                 }
                 if let n = clipOf[k] { attrs[.backgroundColor] = band(n) }
-                if omitted.contains(k) {
+                if isOmitted(k) {
                     attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
                     attrs[.foregroundColor] = NSColor.secondaryLabelColor
                 }
@@ -872,9 +888,9 @@ enum TranscriptText {
                 // Keep the band continuous between words of the same clip.
                 let sep = k + 1 < j ? " " : "\n"
                 var sepAttrs: [NSAttributedString.Key: Any] = [.font: body, .paragraphStyle: paragraphStyle, .octoParagraph: pid.raw]
-                if sep == " ", let n = clipOf[k], clipOf[k + 1] == n, closes[k] == nil {
-                    sepAttrs[.backgroundColor] = band(n)
-                    if omitted.contains(k) && omitted.contains(k + 1) {
+                if sep == " " {
+                    if let n = clipOf[k], clipOf[k + 1] == n, closes[k] == nil { sepAttrs[.backgroundColor] = band(n) }
+                    if isOmitted(k) && isOmitted(k + 1) {
                         sepAttrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
                     }
                 }

@@ -278,3 +278,203 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(p.clip(id)!.segments.map { p.indexRange(of: $0)! } == [1...3])
     }
 }
+
+@Suite struct MergeClipsTests {
+    /// Words 0…19; clips A 1…4 (with 2 omitted), B 7…9, C 12…14, D 17…18.
+    func project() throws -> (Project, [ClipID]) {
+        let words = (0..<20).map { Word(id: WordID($0), text: "w\($0)", start: Double($0), end: Double($0) + 0.8, paragraph: ParagraphID(0)) }
+        var p = Project(source: "x", paragraphs: [Paragraph(id: ParagraphID(0))], words: words)
+        let a = try p.makeClip(words: 1...4, name: "A")
+        try p.omit(words: 2...2, in: a)
+        try p.setOffset(clip: a, segment: 0, inPoint: true, -0.3)
+        try p.setNotes(clip: a, "Note A")
+        let b = try p.makeClip(words: 7...9)
+        try p.setNotes(clip: b, "Note B")
+        let c = try p.makeClip(words: 12...14, name: "C")
+        try p.setOffset(clip: c, segment: 0, inPoint: false, 0.25)
+        let d = try p.makeClip(words: 17...18, name: "D")
+        return (p, [a, b, c, d])
+    }
+
+    @Test func gapsBecomeOmissionsAndInnerOmissionsStay() throws {
+        var (p, ids) = try project()
+        let m = try p.mergeClips([ids[2], ids[0], ids[1]])   // order of the request doesn't matter
+        #expect(p.clips.count == 2)
+        let c = p.clip(m)!
+        #expect(c.segments.map { p.indexRange(of: $0)! } == [1...1, 3...4, 7...9, 12...14])
+        #expect(c.name == "A")
+        #expect(c.notes == "Note A\n\nNote B")
+        #expect(c.segments.first!.inPoint.offset == -0.3)    // the first clip's start offset
+        #expect(c.segments.last!.outPoint.offset == 0.25)    // the last clip's end offset
+        #expect(p.validate().filter { $0.severity == .error }.isEmpty)
+    }
+
+    /// Adjusted clip edges become the edges of the omission between the clips.
+    @Test func clipEdgeAdjustmentsMoveToTheOmissionBetween() throws {
+        var (p, ids) = try project()
+        try p.setOffset(clip: ids[1], segment: 0, inPoint: false, 0.4)    // B's end
+        try p.setOffset(clip: ids[2], segment: 0, inPoint: true, -0.15)   // C's start
+        let m = try p.mergeClips([ids[1], ids[2]])
+        let segs = p.clip(m)!.segments
+        #expect(segs.map { p.indexRange(of: $0)! } == [7...9, 12...14])
+        #expect(segs[0].outPoint.offset == 0.4)     // start of the omitted w10–w11
+        #expect(segs[1].inPoint.offset == -0.15)    // end of the omitted w10–w11
+        #expect(p.resolvedSegments(of: p.clip(m)!).map(\.end).first == 9.8 + 0.4)
+    }
+
+    @Test func onlyConsecutiveClipsMerge() throws {
+        var (p, ids) = try project()
+        #expect(throws: EditError.notConsecutive) { try p.mergeClips([ids[0], ids[2]]) }
+        #expect(throws: EditError.invalidRange) { try p.mergeClips([ids[0]]) }
+    }
+
+    @Test func nameComesFromTheFirstNamedClip() throws {
+        var (p, ids) = try project()
+        try p.setName(clip: ids[0], nil)
+        let m = try p.mergeClips([ids[0], ids[1], ids[2]])
+        #expect(p.clip(m)!.name == "C")
+    }
+}
+
+@Suite struct SplitClipTests {
+    /// Words 0…19; one clip 2…15 with 5…6 and 11 omitted, adjusted start and end, and
+    /// an adjusted omission edge.
+    func project() throws -> (Project, ClipID) {
+        let words = (0..<20).map { Word(id: WordID($0), text: "w\($0)", start: Double($0), end: Double($0) + 0.8, paragraph: ParagraphID(0)) }
+        var p = Project(source: "x", paragraphs: [Paragraph(id: ParagraphID(0))], words: words)
+        let id = try p.makeClip(words: 2...15, name: "Whole")
+        try p.omit(words: 5...6, in: id)
+        try p.omit(words: 11...11, in: id)
+        try p.setOffset(clip: id, segment: 0, inPoint: true, -0.3)
+        try p.setOffset(clip: id, segment: 2, inPoint: false, 0.4)
+        try p.setOffset(clip: id, segment: 0, inPoint: false, 0.05)   // edge of the 5…6 omission
+        try p.setNotes(clip: id, "Notes")
+        return (p, id)
+    }
+
+    @Test func eachPartKeepsItsOmissionsAndOffsets() throws {
+        var (p, id) = try project()
+        let second = try p.splitClip(id, atWord: 9)
+        let a = p.clip(id)!, b = p.clip(second)!
+        #expect(p.clips.map(\.id) == [id, second])
+        #expect(a.segments.map { p.indexRange(of: $0)! } == [2...4, 7...8])
+        #expect(b.segments.map { p.indexRange(of: $0)! } == [9...10, 12...15])
+        #expect(a.segments[0].inPoint.offset == -0.3)      // original start
+        #expect(a.segments[0].outPoint.offset == 0.05)     // omission edge kept
+        #expect(a.segments[1].outPoint.offset == nil)      // new end: default pad
+        #expect(b.segments[0].inPoint.offset == nil)       // new start: default pad
+        #expect(b.segments[1].outPoint.offset == 0.4)      // original end
+        #expect(a.name == "Whole" && a.notes == "Notes" && b.name == nil)
+    }
+
+    @Test func splittingInsideAnOmissionLeavesItBetweenTheClips() throws {
+        var (p, id) = try project()
+        let second = try p.splitClip(id, atWord: 6)       // inside the omitted 5…6
+        #expect(p.clip(id)!.segments.map { p.indexRange(of: $0)! } == [2...4])
+        #expect(p.clip(second)!.segments.map { p.indexRange(of: $0)! } == [7...10, 12...15])
+        #expect(p.omissions.map { p.indexRange(of: $0)! } == [5...6])
+        #expect(p.omissions[0].cutOffset == 0.05)
+        #expect(p.validate().filter { $0.severity == .error }.isEmpty)
+    }
+
+    @Test func splitPointMustLeaveWordsOnBothSides() throws {
+        var (p, id) = try project()
+        #expect(throws: EditError.invalidRange) { try p.splitClip(id, atWord: 2) }    // the first word
+        #expect(throws: EditError.invalidRange) { try p.splitClip(id, atWord: 16) }   // outside
+    }
+
+    @Test func splitThenMergeRestoresTheCuts() throws {
+        var (p, id) = try project()
+        let original = p.clip(id)!.segments.map { p.indexRange(of: $0)! }
+        let second = try p.splitClip(id, atWord: 9)
+        try p.mergeClips([id, second])
+        #expect(p.clip(id)!.segments.map { p.indexRange(of: $0)! } == original)
+    }
+}
+
+@Suite struct OutsideOmissionTests {
+    func ranges(_ p: Project) -> [ClosedRange<Int>] { p.omissions.map { p.indexRange(of: $0)! } }
+
+    @Test func omissionOutsideAClipIsKeptAndANewClipHonoursIt() throws {
+        var p = sampleProject()
+        try p.omit(words: 3...4)
+        #expect(ranges(p) == [3...4])
+        let c = try p.makeClip(words: 1...8)
+        #expect(p.clip(c)!.segments.map { p.indexRange(of: $0)! } == [1...2, 5...8])
+        #expect(p.omissions.isEmpty)
+    }
+
+    @Test func deletingAClipKeepsItsOmissionsAndOffsets() throws {
+        var p = sampleProject()
+        let c = try p.makeClip(words: 1...8)
+        try p.omit(words: 3...4)
+        try p.setOffset(clip: c, segment: 0, inPoint: false, 0.05)
+        try p.setOffset(clip: c, segment: 1, inPoint: true, -0.04)
+        try p.deleteClip(c)
+        #expect(ranges(p) == [3...4])
+        #expect(p.omissions[0].cutOffset == 0.05 && p.omissions[0].resumeOffset == -0.04)
+        let again = try p.makeClip(words: 0...9)
+        let segs = p.clip(again)!.segments
+        #expect(segs.map { p.indexRange(of: $0)! } == [0...2, 5...9])
+        #expect(segs[0].outPoint.offset == 0.05 && segs[1].inPoint.offset == -0.04)
+    }
+
+    @Test func trimmingAndExtendingKeepOmissions() throws {
+        var p = sampleProject()
+        let c = try p.makeClip(words: 1...8)
+        try p.omit(words: 6...7)
+        try p.moveClipEdge(c, start: false, to: 5)
+        #expect(p.indexRange(of: p.clip(c)!) == 1...5)
+        #expect(ranges(p) == [6...7])
+        try p.moveClipEdge(c, start: false, to: 9)
+        #expect(p.omittedRanges(of: p.clip(c)!) == [6...7])
+        #expect(p.omissions.isEmpty)
+        try p.extendClip(c, toInclude: 0...0)
+        #expect(p.omittedRanges(of: p.clip(c)!) == [6...7])
+    }
+
+    @Test func clipEdgesSkipOmittedWords() throws {
+        var p = sampleProject()
+        try p.omit(words: 3...5)
+        #expect(throws: EditError.wouldOmitEverything) { try p.makeClip(words: 3...5) }
+        let c = try p.makeClip(words: 2...5)
+        #expect(p.indexRange(of: p.clip(c)!) == 2...2)
+        #expect(ranges(p) == [3...5])
+    }
+
+    @Test func omittingAcrossAClipEdgeShrinksTheClip() throws {
+        var p = sampleProject()
+        let c = try p.makeClip(words: 3...6)
+        try p.omit(words: 5...8)
+        #expect(p.indexRange(of: p.clip(c)!) == 3...4)
+        #expect(ranges(p) == [5...8])
+        try p.restore(words: 7...8)
+        #expect(ranges(p) == [5...6])
+    }
+
+    @Test func restoreAndOmitOutsideClipsSplitAndJoinRuns() throws {
+        var p = sampleProject()
+        try p.omit(words: 2...5)
+        try p.restore(words: 3...4)
+        #expect(ranges(p) == [2...2, 5...5])
+        try p.omit(words: 3...4)
+        #expect(ranges(p) == [2...5])
+    }
+
+    @Test func mergingAcrossAnOutsideOmission() throws {
+        var p = sampleProject()
+        let a = try p.makeClip(words: 0...2)
+        try p.omit(words: 4...4)
+        let b = try p.makeClip(words: 6...8)
+        try p.mergeClips([a, b])
+        #expect(p.omittedRanges(of: p.clip(a)!) == [3...5])
+        #expect(p.omissions.isEmpty)
+    }
+
+    @Test func zoomOnlyWordsCantBeOmitted() throws {
+        var p = sampleProject()
+        p.paragraphs.append(Paragraph(id: ParagraphID(2), zoomOnly: true))
+        p.words[9].paragraph = ParagraphID(2)
+        #expect(throws: EditError.zoomOnlyText) { try p.omit(words: 8...9) }
+    }
+}

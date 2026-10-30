@@ -226,7 +226,6 @@ struct Reader {
                     openFence = nil
                 } else {
                     openFence = Fence(first: -1, line: line)
-                    if openClip == nil { error("omitted text (~~) must be inside a clip", line) }
                 }
             case .offset(let o):
                 if case .fence = previous, let f = openFence, f.first < 0 {
@@ -249,7 +248,7 @@ struct Reader {
         }
     }
 
-    /// Turns clip spans and omitted runs into segments.
+    /// Turns clip spans and omitted runs into segments, and keeps the runs outside clips.
     mutating func buildClips() {
         // Merge fences into maximal omitted runs (adjacent fences with nothing kept between).
         var runOpen: [Int: Seconds] = [:]
@@ -293,6 +292,21 @@ struct Reader {
                 continue
             }
             project.clips.append(Clip(id: ClipID(n + 1), name: c.name, segments: segments))
+        }
+        // Omitted runs outside the clips. A run never straddles a clip edge: clips
+        // start and end on kept words.
+        var clipped = Set<Int>()
+        for clip in project.clips { if let r = project.indexRange(of: clip) { clipped.formUnion(r) } }
+        var i = 0
+        while i < words.count {
+            guard omitted.contains(i) else { i += 1; continue }
+            var j = i
+            while omitted.contains(j + 1) { j += 1 }
+            if !clipped.contains(i) {
+                project.omissions.append(Omission(first: words[i].id, last: words[j].id,
+                                                  cutOffset: runOpen[i], resumeOffset: runClose[j]))
+            }
+            i = j + 1
         }
     }
 

@@ -105,6 +105,25 @@ public struct Clip: Equatable, Sendable {
     }
 }
 
+/// A run of omitted words outside every clip (omissions inside a clip are the gaps
+/// between its segments). It is kept so that a clip later drawn over these words
+/// still leaves them out. The offsets fine-tune the cuts around the run, as they do
+/// inside a clip: `cutOffset` from the end of the word before it, `resumeOffset` from
+/// the start of the word after it.
+public struct Omission: Equatable, Sendable {
+    public var first: WordID
+    public var last: WordID
+    public var cutOffset: Seconds?
+    public var resumeOffset: Seconds?
+
+    public init(first: WordID, last: WordID, cutOffset: Seconds? = nil, resumeOffset: Seconds? = nil) {
+        self.first = first
+        self.last = last
+        self.cutOffset = cutOffset
+        self.resumeOffset = resumeOffset
+    }
+}
+
 public struct ZoomInfo: Equatable, Sendable {
     public var file: String
     /// Zoom clock = source clock + offset.
@@ -155,13 +174,15 @@ public struct Project: Equatable, Sendable {
     public var words: [Word] { didSet { reindex() } }
     /// Clips in document order; their word ranges never overlap.
     public var clips: [Clip]
+    /// Omitted runs outside every clip, in document order; never inside a clip's range.
+    public var omissions: [Omission]
     public var strayNotes: [StrayNote]
 
     private var wordIndex: [WordID: Int] = [:]
 
     public init(source: String, zoom: ZoomInfo? = nil, settings: ProjectSettings = ProjectSettings(),
                 paragraphs: [Paragraph] = [], words: [Word] = [], clips: [Clip] = [],
-                strayNotes: [StrayNote] = []) {
+                strayNotes: [StrayNote] = [], omissions: [Omission] = []) {
         self.source = source
         self.zoom = zoom
         self.settings = settings
@@ -169,6 +190,7 @@ public struct Project: Equatable, Sendable {
         self.words = words
         self.clips = clips
         self.strayNotes = strayNotes
+        self.omissions = omissions
         reindex()
     }
 

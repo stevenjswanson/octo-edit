@@ -13,6 +13,10 @@ struct NameCommand: AsyncParsableCommand {
         Writes suggestions into transcript.md's front matter. With --apply, unnamed
         clips ({clip} with no name) take the top suggestion; add --all to rename every
         clip. Saving rewrites transcript.md in canonical form.
+
+        EXAMPLES
+          octoedit name seminar.octoedit                 suggestions only
+          octoedit name seminar.octoedit --apply         also name unnamed clips
         """
     )
 

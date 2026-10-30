@@ -115,6 +115,8 @@ enum MainMenu {
             item("Set Clip Start at Playhead", #selector(ProjectDocument.setClipStart(_:)), "i", []),
             item("Set Clip End at Playhead", #selector(ProjectDocument.setClipEnd(_:)), "o", []),
             .separator(),
+            item("Split Clip at Caret", #selector(ProjectDocument.splitClip(_:)), "k", [.command, .shift]),
+            item("Merge Clips", #selector(ProjectDocument.mergeClips(_:)), "m", [.command, .shift]),
             item("Inspect Cut…", #selector(ProjectDocument.inspectCut(_:)), "b"),
             item("Suggest Names for Clip", #selector(ProjectDocument.suggestNames(_:)), "n", [.command, .option]),
             item("Name Unnamed Clips", #selector(ProjectDocument.nameUnnamedClips(_:))),

@@ -19,11 +19,10 @@ struct ClipShelf: View {
                     }
                     ForEach(Array(project.clips.enumerated()), id: \.element.id) { n, clip in
                         card(n, clip, slug: slugs[clip.id] ?? "", duration: project.duration(of: clip),
-                             selected: clip.id == model.selectedClip)
+                             selected: model.shelfSelection.contains(clip.id))
                             .id(clip.id)
                             .onTapGesture {
-                                model.select(clip: clip.id, reveal: true, seekSource: true)
-                                model.focus(.preview)
+                                model.shelfClick(clip.id, shift: NSEvent.modifierFlags.contains(.shift))
                             }
                             .contextMenu {
                                 Button("Rename…") { model.requestRename(clip.id) }
@@ -42,6 +41,15 @@ struct ClipShelf: View {
             }
         }
             Divider()
+            if model.shelfSelection.count >= 2 {
+                Button { model.mergeSelectedClips() } label: {
+                    Label("Merge \(model.shelfSelection.count) Clips", systemImage: "arrow.triangle.merge")
+                }
+                .disabled(!model.canMerge || !model.canEdit)
+                .help(model.canMerge ? "Join into one clip; the text between them becomes omitted (⇧⌘M)"
+                                     : "Only consecutive clips can be merged")
+                .padding(.leading, 12)
+            }
             Button { model.showExport() } label: {
                 Label("Export…", systemImage: "square.and.arrow.up")
             }
