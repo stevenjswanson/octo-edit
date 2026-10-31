@@ -127,10 +127,16 @@ struct SpeakersPanel: View {
                 Text("No speakers yet. Add names, then Identify Speakers… to find who speaks when.")
                     .font(.caption).foregroundStyle(.secondary).frame(width: 280, alignment: .leading)
             }
-            ForEach(Array(order.enumerated()), id: \.element) { n, name in
-                SpeakerRow(model: model, index: n, name: name, seconds: time[name] ?? 0, others: order.filter { $0 != name },
-                           portrait: portraits.images[name])
+            // Portraits are big enough to tell people apart; past six rows the list scrolls.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(order.enumerated()), id: \.element) { n, name in
+                        SpeakerRow(model: model, index: n, name: name, seconds: time[name] ?? 0, others: order.filter { $0 != name },
+                                   portrait: portraits.images[name])
+                    }
+                }
             }
+            .frame(height: CGFloat(min(order.count, 6)) * (SpeakerRow.portraitSize + 8))
             Divider()
             HStack {
                 Button("Add Speaker…") {
@@ -158,6 +164,7 @@ struct SpeakersPanel: View {
 }
 
 private struct SpeakerRow: View {
+    static let portraitSize: CGFloat = 96
     let model: DocumentModel
     let index: Int
     let name: String
@@ -173,7 +180,7 @@ private struct SpeakerRow: View {
             Group {
                 if let portrait { Image(nsImage: portrait).resizable() } else { Image(systemName: "person.crop.square").resizable().foregroundStyle(.tertiary) }
             }
-            .frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 4))
+            .frame(width: Self.portraitSize, height: Self.portraitSize).clipShape(RoundedRectangle(cornerRadius: 6))
             TextField("Name", text: $text)
                 .textFieldStyle(.roundedBorder)
                 .focused($editing)
@@ -319,7 +326,7 @@ final class SpeakerPortraits {
                 let rect = CGRect(x: b.centerX * Double(cg.width) - side / 2, y: b.centerY * Double(cg.height) - side / 2,
                                   width: side, height: side).intersection(CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
                 guard let crop = cg.cropping(to: rect) else { return }
-                images[name] = NSImage(cgImage: crop, size: NSSize(width: 32, height: 32))
+                images[name] = NSImage(cgImage: crop, size: NSSize(width: crop.width, height: crop.height))
             }
         }
     }
