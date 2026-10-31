@@ -165,6 +165,7 @@ private struct SpeakerRow: View {
     let others: [String]
     let portrait: NSImage?
     @State private var text = ""
+    @FocusState private var editing: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -175,7 +176,9 @@ private struct SpeakerRow: View {
             .frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 4))
             TextField("Name", text: $text)
                 .textFieldStyle(.roundedBorder)
+                .focused($editing)
                 .onSubmit(commit)
+                .onChange(of: editing) { _, now in if !now { commit() } }
                 .frame(width: 150)
             Text(Self.clock(seconds)).font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
             Menu {
@@ -191,9 +194,13 @@ private struct SpeakerRow: View {
         }
         .onAppear { text = name }
         .onChange(of: name) { _, new in text = new }
+        // Closing the panel or moving to another field keeps the typed name; Return isn't needed.
+        .onDisappear(perform: commit)
     }
 
     private func commit() {
+        // The row may outlive its name (after a rename or merge it is replaced by a new row).
+        guard model.project.speakers.contains(name) || model.project.paragraphs.contains(where: { $0.speaker == name }) else { return }
         let t = text.trimmingCharacters(in: .whitespaces)
         if t.isEmpty { text = name } else if t != name { model.renameSpeaker(name, to: t) }
     }
