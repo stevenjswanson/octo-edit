@@ -139,18 +139,29 @@ public enum Codec: String, Sendable, CaseIterable {
     case hevc, h264
 }
 
+/// Output shape of exported clips.
+public enum Framing: String, Sendable, CaseIterable {
+    /// As the input video came in: no crop.
+    case source
+    /// A full-height 9:16 column of the shot, centred on the current speaker.
+    case portrait = "9:16"
+}
+
 public struct ProjectSettings: Equatable, Sendable {
     public var prePad: Seconds
     public var postPad: Seconds
     public var crossfade: Seconds
     /// nil = same codec as the input video.
     public var codec: Codec?
+    public var framing: Framing
 
-    public init(prePad: Seconds = 0.12, postPad: Seconds = 0.18, crossfade: Seconds = 0.02, codec: Codec? = nil) {
+    public init(prePad: Seconds = 0.12, postPad: Seconds = 0.18, crossfade: Seconds = 0.02, codec: Codec? = nil,
+                framing: Framing = .source) {
         self.prePad = prePad
         self.postPad = postPad
         self.crossfade = crossfade
         self.codec = codec
+        self.framing = framing
     }
 }
 
@@ -177,12 +188,15 @@ public struct Project: Equatable, Sendable {
     /// Omitted runs outside every clip, in document order; never inside a clip's range.
     public var omissions: [Omission]
     public var strayNotes: [StrayNote]
+    /// The roster: every speaker name in the project, including names no paragraph
+    /// uses yet. Every paragraph's speaker is on it (see `Project.speakersInOrder`).
+    public var speakers: [String]
 
     private var wordIndex: [WordID: Int] = [:]
 
     public init(source: String, zoom: ZoomInfo? = nil, settings: ProjectSettings = ProjectSettings(),
                 paragraphs: [Paragraph] = [], words: [Word] = [], clips: [Clip] = [],
-                strayNotes: [StrayNote] = [], omissions: [Omission] = []) {
+                strayNotes: [StrayNote] = [], omissions: [Omission] = [], speakers: [String] = []) {
         self.source = source
         self.zoom = zoom
         self.settings = settings
@@ -191,6 +205,7 @@ public struct Project: Equatable, Sendable {
         self.clips = clips
         self.strayNotes = strayNotes
         self.omissions = omissions
+        self.speakers = speakers
         reindex()
     }
 

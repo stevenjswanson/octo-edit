@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Above the transcript: Cut / Edit Text mode, search, and Follow playhead.
+/// Above the transcript: Cut / Edit Text mode, Follow playhead, and search.
 struct TranscriptToolbar: View {
     @Bindable var model: DocumentModel
     @FocusState private var searchFocused: Bool
@@ -18,6 +18,10 @@ struct TranscriptToolbar: View {
             .fixedSize()
             .disabled(model.loadErrors)
             .help("Cut: mark clips and omissions. Edit Text: fix words (⇧⌘T); clips and timing are kept.")
+
+            Toggle("Follow playhead", isOn: $model.followPlayhead)
+                .toggleStyle(.checkbox)
+                .help("Keep the playing word in view while a video plays")
 
             if model.textEditing {
                 Text("Editing words — clips and timing are kept. Changes apply when you switch back to Cut.")
@@ -45,10 +49,6 @@ struct TranscriptToolbar: View {
             .padding(.horizontal, 6).padding(.vertical, 3)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
-
-            Toggle("Follow playhead", isOn: $model.followPlayhead)
-                .toggleStyle(.checkbox)
-                .help("Keep the playing word in view while a video plays")
         }
         .controlSize(.small)
         .padding(.horizontal, 10).padding(.vertical, 5)

@@ -1,7 +1,7 @@
 import SwiftUI
 import Core
 
-/// Under the clip preview: the selected clip's name (with ✨ suggestions), the file it
+/// Beside the video: the selected clip's name (with ✨ suggestions), the file it
 /// will export to, and its notes. Edits commit on Return / leaving the field, each as
 /// one undoable change.
 struct ClipInfoPanel: View {
@@ -16,6 +16,7 @@ struct ClipInfoPanel: View {
     var body: some View {
         let clip = model.project.clip(clipID)
         VStack(alignment: .leading, spacing: 6) {
+            Text("Clip").font(.headline)
             HStack(spacing: 6) {
                 TextField("Clip name", text: $name)
                     .textFieldStyle(.roundedBorder)
@@ -28,21 +29,23 @@ struct ClipInfoPanel: View {
                         .help("Suggest names (⌥⌘N)")
                         .disabled(!model.canEdit)
                 }
-                if let suggestions = clip?.suggestions, !suggestions.isEmpty {
-                    Menu {
-                        ForEach(suggestions, id: \.self) { s in
-                            Button(s) {
-                                name = s
-                                model.rename(clipID, to: s)
-                            }
-                        }
-                    } label: { Text("Suggestions") }
-                    .fixedSize()
-                    .disabled(!model.canEdit)
-                }
             }
-            Text("File: \(model.project.slug(of: clipID) ?? "")" + ".mp4")
+            if let suggestions = clip?.suggestions, !suggestions.isEmpty {
+                Menu {
+                    ForEach(suggestions, id: \.self) { s in
+                        Button(s) {
+                            name = s
+                            model.rename(clipID, to: s)
+                        }
+                    }
+                } label: { Text("Suggestions") }
+                .fixedSize()
+                .disabled(!model.canEdit)
+            }
+            Text("File: \(model.project.slug(of: clipID) ?? "")" + ".mp4"
+                 + (model.preview.clipID == clipID && model.preview.duration > 0 ? " · " + ClipShelf.duration(model.preview.duration) : ""))
                 .font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $notes)
                     .font(.callout)
@@ -57,10 +60,10 @@ struct ClipInfoPanel: View {
                         .allowsHitTesting(false)
                 }
             }
-            .frame(height: 64)
+            .frame(maxHeight: .infinity)
         }
         .disabled(!model.canEdit)
-        .padding(.horizontal, 10).padding(.bottom, 8)
+        .padding(10)
         .onAppear(perform: load)
         .onChange(of: clipID) { old, _ in
             commit(old)

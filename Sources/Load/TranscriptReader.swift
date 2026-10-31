@@ -18,6 +18,7 @@ public enum TranscriptReader {
         var project = r.project
         attachTimes(&project, timedWords)
         r.attachNotesAndSuggestions(&project)
+        project.normalizeSpeakers()
         var issues = r.issues
         if !r.issues.contains(where: { $0.severity == .error }) {
             issues += project.validate().filter { $0.severity == .warning || !r.issues.contains($0) }
@@ -340,6 +341,18 @@ struct Reader {
             if let c = d["codec"] as? String {
                 if let codec = Codec(rawValue: c) { project.settings.codec = codec } else { error("defaults.codec must be hevc or h264", 2) }
             }
+            if let f = d["framing"] {
+                // YAML 1.1 reads an unquoted 9:16 as the base-60 number 9×60+16.
+                if let framing = (f as? String).flatMap(Framing.init(rawValue:)) ?? ((f as? Int) == 556 ? .portrait : nil) {
+                    project.settings.framing = framing
+                } else { error("defaults.framing must be source or \"9:16\"", 2) }
+            }
+        }
+        if let s = map["speakers"] {
+            if let names = s as? [Any] {
+                project.speakers = []
+                for n in names { project.addSpeaker("\(n)") }
+            } else { error("`speakers:` must be a list of names, like [Mia Minnes, Kathy]", 2) }
         }
         if let s = map["suggestions"] as? [String: Any] {
             for (k, v) in s {

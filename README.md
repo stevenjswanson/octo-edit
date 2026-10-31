@@ -41,6 +41,9 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | `~~{+40ms} …` / `… {-60ms}~~` | Adjust the cut at an omission: `{+40ms}` just inside the opening `~~` keeps 40 ms after the word before it; `{-60ms}` just inside the closing `~~` resumes 60 ms before the word after it. Default 0 (word edges are already tightened to the speech). |
 | `[^slug]: text` | Notes for the clip with that slug. |
 | `> (00:00:02.1) **Speaker:**` | Zoom-only text (said before or after the recording); can't contain markers. |
+| `[00:23:46.3] **Speaker:**` | Starts a paragraph. Each paragraph has one speaker; to change who said some words, split the paragraph and give the new part its own header. |
+| `speakers: [Mia Minnes, Kathy]` (front matter) | The roster of speaker names. Header names missing from it are added on load; the tool writes it in order of first appearance, with unused names last. |
+| `defaults: { …, framing: "9:16" }` (front matter) | Output shape: `source` (default, as the video came in) or `"9:16"` (a full-height column that follows the speaker). Stored, but not yet applied by `render`. |
 
 Edit the words freely: timing is re-attached on every load by aligning the text with
 `words.tsv`, so fixing a misheard word keeps its timing and deleting one shifts nothing.

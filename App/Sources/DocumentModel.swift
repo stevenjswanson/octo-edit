@@ -37,8 +37,8 @@ final class DocumentModel {
     var anyPlaying: Bool { isPlaying || preview.isPlayingObserved }
 
     enum Pane { case source, preview }
-    /// The video pane Space controls. The preview unless the user deliberately turns
-    /// to the source (clicks in it, plays it, or clicks a word outside every clip).
+    /// What the video pane shows (and Space controls): the selected clip's preview,
+    /// or the recording itself after a click or selection outside every clip.
     private(set) var activePane = Pane.preview
     /// The source playhead (for the inspector's playhead line).
     private(set) var sourceTime: Double?
@@ -301,7 +301,11 @@ final class DocumentModel {
         let old = project.paragraph(pid)?.speaker
         let targets = everywhere ? project.paragraphs.filter { $0.speaker == old }.map(\.id) : [pid]
         perform(everywhere ? "Rename Speaker" : "Set Speaker") { p in
-            for id in targets { p.setSpeaker(paragraph: id, new) }
+            if everywhere, let old, let new {
+                p.renameSpeaker(old, to: new)
+            } else {
+                for id in targets { p.setSpeaker(paragraph: id, new) }
+            }
         }
     }
 
@@ -501,6 +505,7 @@ final class DocumentModel {
     func select(clip id: ClipID?, reveal: Bool = false, seekSource: Bool = false) {
         selectedClip = id
         shelfSelection = id.map { [$0] } ?? []
+        if id != nil { activePane = .preview }
         refreshPreview()
         guard reveal || seekSource, let id, let clip = project.clip(id), let r = project.indexRange(of: clip) else { return }
         if reveal { revealWord(r.lowerBound) }
@@ -513,12 +518,13 @@ final class DocumentModel {
     }
 
     /// A click on a word (no drag): seek the source, select the clip it is in, and
-    /// line the preview up with it when it's in the selected clip. A click during
-    /// playback also stops it; returns true then (the view selects the word).
+    /// line the preview up with it. Outside every clip the video pane switches to the
+    /// recording at the word. A click during playback only stops it;
+    /// returns true then (the view selects the word).
     @discardableResult
     func clicked(word i: Int) -> Bool {
-        // Inside a clip the preview is lined up with the word; outside, only the source can play it.
-        activePane = project.clip(containingWordAt: i) == nil ? .source : .preview
+        let outside = project.clip(containingWordAt: i) == nil
+        activePane = outside ? .source : .preview
         let wasPlaying = player.rate != 0 || preview.player.rate != 0
         if wasPlaying {
             player.pause()
@@ -526,6 +532,7 @@ final class DocumentModel {
             preview.player.pause()
         }
         defer { if wasPlaying { selection = i...i } }
+        if outside && !wasPlaying { showSource(atWord: i); return false }
         seekSource(toWord: i)
         if let c = project.clip(containingWordAt: i) {
             if c.id != selectedClip { select(clip: c.id) }
@@ -534,7 +541,21 @@ final class DocumentModel {
         return wasPlaying
     }
 
+    /// A dragged selection that starts outside every clip shows the recording there.
+    func selected(words s: ClosedRange<Int>) {
+        guard project.clip(containingWordAt: s.lowerBound) == nil else { return }
+        showSource(atWord: s.lowerBound)
+    }
+
     // MARK: Playback
+
+    /// Shows the recording in the video pane, paused at word `i`.
+    func showSource(atWord i: Int) {
+        preview.cancelExcerpt()
+        preview.player.pause()
+        activePane = .source
+        seekSource(toWord: i)
+    }
 
     func seekSource(toWord i: Int) {
         guard project.words.indices.contains(i), let t = project.words[i].start else { return }

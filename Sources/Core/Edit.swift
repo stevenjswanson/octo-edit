@@ -10,6 +10,8 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
     case notSplittable
     case emptyParagraph
     case notConsecutive
+    case differentSpeakers
+    case speakerInUse(String)
 
     public var description: String {
         switch self {
@@ -22,12 +24,14 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
         case .notSplittable: "the paragraph can't be split there"
         case .notConsecutive: "only consecutive clips (with no other clip between them) can be merged"
         case .emptyParagraph: "a paragraph can't be left empty (omit its words instead)"
+        case .differentSpeakers: "paragraphs with different speakers can't be merged (assign the words to a speaker instead)"
+        case .speakerInUse(let name): "\(name) still has paragraphs; assign them to someone else first"
         }
     }
 }
 
 extension Project {
-    private func checkRange(_ r: ClosedRange<Int>) throws {
+    func checkRange(_ r: ClosedRange<Int>) throws {
         guard r.lowerBound >= 0, r.upperBound < words.count else { throw EditError.invalidRange }
     }
 
@@ -308,9 +312,11 @@ extension Project {
         clips[try clipIndex(id)].suggestions = suggestions
     }
 
+    /// Sets one paragraph's speaker (nil or blank = none), adding a new name to the roster.
     public mutating func setSpeaker(paragraph id: ParagraphID, _ speaker: String?) {
         guard let i = paragraphs.firstIndex(where: { $0.id == id }) else { return }
-        paragraphs[i].speaker = speaker
+        paragraphs[i].speaker = Self.speakerName(speaker)
+        addSpeaker(speaker)
     }
 
     /// Splits a paragraph so that word `i` starts a new one (same speaker), inserted
@@ -331,10 +337,12 @@ extension Project {
         return id
     }
 
-    /// Merges a paragraph into the one before it (its words move; the earlier speaker wins).
-    public mutating func mergeWithPrevious(paragraph id: ParagraphID) {
+    /// Merges a paragraph into the one before it (its words move). Every paragraph has
+    /// one speaker, so paragraphs with different speakers can't be merged.
+    public mutating func mergeWithPrevious(paragraph id: ParagraphID) throws {
         guard let i = paragraphs.firstIndex(where: { $0.id == id }), i > 0,
               !paragraphs[i].zoomOnly, !paragraphs[i - 1].zoomOnly else { return }
+        guard paragraphs[i].speaker == paragraphs[i - 1].speaker else { throw EditError.differentSpeakers }
         let target = paragraphs[i - 1].id
         for w in words.indices where words[w].paragraph == id { words[w].paragraph = target }
         paragraphs.remove(at: i)

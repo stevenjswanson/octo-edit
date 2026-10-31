@@ -1,23 +1,16 @@
 import SwiftUI
 import Core
 
-/// The project window: source video and clip preview on top, transcript in the
-/// middle, clip shelf at the bottom.
+/// The project window: the video pane on top, transcript in the middle, clip shelf
+/// at the bottom.
 struct DocumentView: View {
     let model: DocumentModel
     let document: ProjectDocument
 
     var body: some View {
         VSplitView {
-            HSplitView {
-                SourcePane(model: model, locate: document.locateSource)
-                    .focusOutline(model.activePane == .source)
-                    .frame(minWidth: 420, idealWidth: 820)
-                ClipPreviewPane(model: model, preview: model.preview, focus: { model.focus(.preview) })
-                    .focusOutline(model.activePane == .preview)
-                    .frame(minWidth: 300, idealWidth: 520)
-            }
-            .frame(minHeight: 240, idealHeight: 420)
+            VideoPane(model: model, preview: model.preview, locate: document.locateSource)
+                .frame(minHeight: 240, idealHeight: 420)
 
             VStack(spacing: 0) {
                 TranscriptToolbar(model: model)
@@ -50,96 +43,80 @@ struct DocumentView: View {
     }
 }
 
-struct SourcePane: View {
-    let model: DocumentModel
-    let locate: () -> Void
-
-    var body: some View {
-        ZStack {
-            Color.black
-            if model.sourceMissing {
-                VStack(spacing: 10) {
-                    Image(systemName: "film.stack").font(.largeTitle).foregroundStyle(.secondary)
-                    Text("Can’t find the input video").font(.headline)
-                    Text(model.sourceURL?.path ?? "").font(.caption).foregroundStyle(.secondary)
-                        .textSelection(.enabled).multilineTextAlignment(.center)
-                    Button("Locate…", action: locate)
-                }
-                .padding()
-                .foregroundStyle(.white)
-            } else {
-                PlayerView(player: model.player, onFocus: { model.focus(.source) })
-                    .overlay(alignment: .topTrailing) { SpeedBadge(watcher: model.sourceSpeed) }
-            }
-        }
-    }
-}
-
-/// Plays the selected clip exactly as it will export (omissions cut, crossfades in).
-struct ClipPreviewPane: View {
+/// The video pane, with the selected clip's name, notes and Auto preview beside it.
+/// The video is the selected clip exactly as it will export (omissions cut,
+/// crossfades in), or the recording itself after a click outside every clip. Both
+/// players stay alive so switching is instant.
+struct VideoPane: View {
     let model: DocumentModel
     let preview: PreviewModel
-    let focus: () -> Void
+    let locate: () -> Void
     @Bindable private var settings = PlaybackSettings.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(preview.title.isEmpty ? "Clip preview" : preview.title)
-                    .font(.headline).lineLimit(1)
-                Spacer()
-                Toggle("Auto preview", isOn: $settings.autoPreview)
-                    .toggleStyle(.checkbox).controlSize(.small)
-                    .help("After an edit, play the spot that changed (⇧⌘P)")
-                if preview.building { ProgressView().controlSize(.small) }
-                if preview.duration > 0 {
-                    Text(ClipShelf.duration(preview.duration)).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+        HSplitView {
+            video
+                .frame(minWidth: 420)
+            VStack(alignment: .leading, spacing: 0) {
+                if let id = model.selectedClip, model.project.clip(id) != nil {
+                    ClipInfoPanel(model: model, clipID: id)
+                } else {
+                    Text("Select a clip to name it and add notes.")
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                HStack {
+                    Toggle("Auto preview", isOn: $settings.autoPreview)
+                        .toggleStyle(.checkbox).controlSize(.small)
+                        .help("After an edit, play the spot that changed (⇧⌘P)")
+                    Spacer()
+                }
+                .padding(.horizontal, 10).padding(.bottom, 8)
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
+            .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
+            .background(Color(nsColor: .underPageBackgroundColor))
+        }
+    }
+
+    private var video: some View {
+        let showingSource = model.activePane == .source
+        return VStack(spacing: 0) {
             ZStack {
                 Color.black
-                if let message = preview.message {
-                    Text(message).foregroundStyle(.secondary)
+                if model.sourceMissing {
+                    VStack(spacing: 10) {
+                        Image(systemName: "film.stack").font(.largeTitle).foregroundStyle(.secondary)
+                        Text("Can’t find the input video").font(.headline)
+                        Text(model.sourceURL?.path ?? "").font(.caption).foregroundStyle(.secondary)
+                            .textSelection(.enabled).multilineTextAlignment(.center)
+                        Button("Locate…", action: locate)
+                    }
+                    .padding()
+                    .foregroundStyle(.white)
                 } else {
-                    PlayerView(player: preview.player, onFocus: focus)
-                        .overlay(alignment: .topTrailing) { SpeedBadge(watcher: model.previewSpeed) }
+                    PlayerView(player: model.player, onFocus: { model.focus(.source) })
+                        .overlay(alignment: .topTrailing) { SpeedBadge(watcher: model.sourceSpeed) }
+                        .opacity(showingSource ? 1 : 0)
+                        .allowsHitTesting(showingSource)
+                    Group {
+                        if let message = preview.message {
+                            Text(message).foregroundStyle(.secondary)
+                        } else {
+                            PlayerView(player: preview.player, onFocus: { model.focus(.preview) })
+                                .overlay(alignment: .topTrailing) { SpeedBadge(watcher: model.previewSpeed) }
+                        }
+                    }
+                    .opacity(showingSource ? 0 : 1)
+                    .allowsHitTesting(!showingSource)
+                    if preview.building && !showingSource {
+                        ProgressView().controlSize(.small).padding(8)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .allowsHitTesting(false)
+                    }
                 }
-            }
-            SegmentStrip(segments: preview.segments, duration: preview.duration)
-                .frame(height: 8)
-                .padding(.horizontal, 10).padding(.vertical, 6)
-            if let id = model.selectedClip, model.project.clip(id) != nil {
-                ClipInfoPanel(model: model, clipID: id)
             }
         }
         .background(Color(nsColor: .underPageBackgroundColor))
-    }
-}
-
-extension View {
-    /// The video pane Space controls gets an accent outline.
-    func focusOutline(_ on: Bool) -> some View {
-        overlay(Rectangle().strokeBorder(on ? Color.accentColor : .clear, lineWidth: 2).allowsHitTesting(false))
-    }
-}
-
-/// The kept segments of the previewed clip, end to end; the gaps mark the joins.
-struct SegmentStrip: View {
-    let segments: [(start: Double, duration: Double)]
-    let duration: Double
-
-    var body: some View {
-        GeometryReader { geo in
-            let gap: CGFloat = segments.count > 1 ? 3 : 0
-            let usable = max(geo.size.width - gap * CGFloat(max(segments.count - 1, 0)), 0)
-            HStack(spacing: gap) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { _, s in
-                    RoundedRectangle(cornerRadius: 2).fill(Color.accentColor.opacity(0.7))
-                        .frame(width: duration > 0 ? usable * s.duration / duration : 0)
-                }
-            }
-        }
     }
 }
 

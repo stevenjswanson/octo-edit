@@ -121,11 +121,14 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(p.indexRange(of: p.clip(a)!) == 0...3)
     }
 
-    @Test func mergeParagraphs() {
+    @Test func mergeParagraphs() throws {
         var p = sampleProject()
         p.paragraphs.append(Paragraph(id: ParagraphID(2), speaker: "B"))
         for i in 5..<10 { p.words[i].paragraph = ParagraphID(2) }
-        p.mergeWithPrevious(paragraph: ParagraphID(2))
+        #expect(throws: EditError.differentSpeakers) { try p.mergeWithPrevious(paragraph: ParagraphID(2)) }
+        #expect(p.paragraphs.count == 2)
+        p.setSpeaker(paragraph: ParagraphID(2), "A")
+        try p.mergeWithPrevious(paragraph: ParagraphID(2))
         #expect(p.paragraphs.count == 1)
         #expect(p.words.allSatisfy { $0.paragraph == ParagraphID(1) })
     }
@@ -184,7 +187,7 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(p.paragraph(id)?.speaker == "A")
         #expect(throws: EditError.notSplittable) { try p.splitParagraph(atWord: 6) }   // already first word
         #expect(throws: EditError.notSplittable) { try p.splitParagraph(atWord: 1) }   // Zoom-only
-        p.mergeWithPrevious(paragraph: id)
+        try p.mergeWithPrevious(paragraph: id)
         #expect(p.paragraphs.count == 2)
     }
 }
@@ -476,5 +479,75 @@ func sampleProject(count: Int = 10) -> Project {
         p.paragraphs.append(Paragraph(id: ParagraphID(2), zoomOnly: true))
         p.words[9].paragraph = ParagraphID(2)
         #expect(throws: EditError.zoomOnlyText) { try p.omit(words: 8...9) }
+    }
+}
+
+@Suite struct SpeakerTests {
+    /// Words 0–4 in paragraph 1 (A), 5–9 in paragraph 2 (B).
+    func project() -> Project {
+        var p = sampleProject()
+        p.paragraphs.append(Paragraph(id: ParagraphID(2), speaker: "B"))
+        for i in 5..<10 { p.words[i].paragraph = ParagraphID(2) }
+        p.normalizeSpeakers()
+        return p
+    }
+
+    func speakers(_ p: Project) -> [String?] { p.words.map { p.paragraph($0.paragraph)?.speaker } }
+
+    @Test func rosterIsInOrderOfFirstAppearanceThenUnused() {
+        var p = project()
+        p.speakers = ["Unused", "B"]
+        #expect(p.speakersInOrder() == ["A", "B", "Unused"])
+        p.normalizeSpeakers()
+        #expect(p.speakers == ["A", "B", "Unused"])
+    }
+
+    @Test func assignMidParagraphSplitsBothSides() throws {
+        var p = project()
+        try p.assignSpeaker(words: 2...3, "C")
+        #expect(speakers(p) == ["A", "A", "C", "C", "A", "B", "B", "B", "B", "B"])
+        #expect(p.paragraphs.count == 4)
+        #expect(p.speakers == ["A", "B", "C"])
+    }
+
+    @Test func assignAcrossParagraphsAndWholeParagraphs() throws {
+        var p = project()
+        try p.assignSpeaker(words: 3...6, "C")
+        #expect(speakers(p) == ["A", "A", "A", "C", "C", "C", "C", "B", "B", "B"])
+        #expect(p.paragraphs.count == 4)   // C's words stay in their two paragraphs
+        var q = project()
+        try q.assignSpeaker(words: 5...9, "A")
+        #expect(q.paragraphs.count == 2)   // a whole paragraph: no split, and no auto-merge
+        #expect(speakers(q).allSatisfy { $0 == "A" })
+    }
+
+    @Test func assignRefusesZoomOnlyText() {
+        var p = project()
+        p.paragraphs.insert(Paragraph(id: ParagraphID(9), speaker: "Z", zoomOnly: true, zoomStart: 0), at: 0)
+        p.words[0].paragraph = ParagraphID(9)
+        #expect(throws: EditError.zoomOnlyText) { try p.assignSpeaker(words: 0...2, "C") }
+    }
+
+    @Test func renameAndMerge() throws {
+        var p = project()
+        p.renameSpeaker("A", to: "Alice")
+        #expect(p.speakers == ["Alice", "B"])
+        #expect(p.paragraphs[0].speaker == "Alice")
+        p.renameSpeaker("B", to: "Alice")   // an existing name merges the two
+        #expect(p.speakers == ["Alice"])
+        #expect(p.paragraphs.allSatisfy { $0.speaker == "Alice" })
+        try p.mergeWithPrevious(paragraph: ParagraphID(2))
+        #expect(p.paragraphs.count == 1)
+    }
+
+    @Test func addAndRemove() throws {
+        var p = project()
+        p.addSpeaker("  Carol ")
+        p.addSpeaker("Carol")
+        p.addSpeaker("   ")
+        #expect(p.speakers == ["A", "B", "Carol"])
+        #expect(throws: EditError.speakerInUse("A")) { try p.removeSpeaker("A") }
+        try p.removeSpeaker("Carol")
+        #expect(p.speakers == ["A", "B"])
     }
 }

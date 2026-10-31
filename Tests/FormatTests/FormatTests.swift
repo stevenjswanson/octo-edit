@@ -298,6 +298,53 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
     }
 }
 
+@Suite struct SpeakerFormatTests {
+    @Test func rosterRoundTripsInOrderOfFirstAppearance() throws {
+        let text = handWritten.replacingOccurrences(of: "defaults: { pre: 120ms, post: 180ms, crossfade: 20ms }",
+            with: "defaults: { pre: 120ms, post: 180ms, crossfade: 20ms }\nspeakers: [Steve Swanson, \"Guest #1\", Dean Chen]")
+        let r = parse(text)
+        #expect(!r.hasErrors, "\(r.issues)")
+        #expect(r.project.speakers == ["Dean Chen", "Steve Swanson", "Guest #1"])
+        let out = TranscriptWriter.write(r.project)
+        #expect(out.contains("\nspeakers: [Dean Chen, Steve Swanson, \"Guest #1\"]\n"))
+        #expect(TranscriptWriter.write(TranscriptReader.parse(out, timedWords: timedWords(for: text)).project) == out)
+    }
+
+    @Test func rosterIsDerivedFromHeadersWhenMissing() {
+        let p = parse(handWritten).project
+        #expect(p.speakers == ["Dean Chen", "Steve Swanson"])
+        #expect(TranscriptWriter.write(p).contains("\nspeakers: [Dean Chen, Steve Swanson]\n"))
+    }
+
+    @Test func assignedSpeakerRoundTrips() throws {
+        var p = parse(handWritten).project
+        try p.assignSpeaker(words: word(p, "Today")...word(p, "Today"), "Mia Minnes")
+        let out = TranscriptWriter.write(p)
+        #expect(out.contains("Wednesday.\n\n[00:00:04.5] **Mia Minnes:**\nToday\n\n[00:00:05.0] **Steve Swanson:**\nwe have"))
+        let back = TranscriptReader.parse(out, timedWords: timedWords(for: handWritten)).project
+        #expect(back.speakers == ["Dean Chen", "Steve Swanson", "Mia Minnes"])
+        #expect(back.clips == p.clips)
+    }
+
+    @Test func framingRoundTripsQuotedAndAcceptsBare() throws {
+        var p = parse(handWritten).project
+        #expect(p.settings.framing == .source)
+        #expect(!TranscriptWriter.write(p).contains("framing"))
+        p.settings.framing = .portrait
+        let out = TranscriptWriter.write(p)
+        #expect(out.contains("crossfade: 20ms, framing: \"9:16\" }"))
+        #expect(TranscriptReader.parse(out, timedWords: timedWords(for: handWritten)).project.settings.framing == .portrait)
+        for value in ["9:16", "source", "\"source\""] {
+            let text = handWritten.replacingOccurrences(of: "crossfade: 20ms }", with: "crossfade: 20ms, framing: \(value) }")
+            let r = parse(text)
+            #expect(!r.hasErrors, "\(value): \(r.issues)")
+            #expect(r.project.settings.framing == (value == "9:16" ? .portrait : .source))
+        }
+        let bad = parse(handWritten.replacingOccurrences(of: "crossfade: 20ms }", with: "crossfade: 20ms, framing: 4:3 }"))
+        #expect(bad.issues.contains { $0.severity == .error && $0.message.contains("framing") })
+    }
+}
+
 @Suite struct EncodingTests {
     /// A start time straight from ingest and the same time read back from words.tsv
     /// (millisecond precision) must give the same paragraph header.

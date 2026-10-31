@@ -25,7 +25,10 @@ public enum TranscriptWriter {
         }
         var defaults = "defaults: { pre: \(Grammar.duration(p.settings.prePad)), post: \(Grammar.duration(p.settings.postPad)), crossfade: \(Grammar.duration(p.settings.crossfade))"
         if let c = p.settings.codec { defaults += ", codec: \(c.rawValue)" }
+        if p.settings.framing != .source { defaults += ", framing: \(quoted(p.settings.framing.rawValue))" }
         out.append(defaults + " }")
+        let speakers = p.speakersInOrder()
+        if !speakers.isEmpty { out.append("speakers: [" + speakers.map(yaml).joined(separator: ", ") + "]") }
         let slugs = p.slugs()
         let suggested = p.clips.filter { !$0.suggestions.isEmpty }
         if !suggested.isEmpty {
