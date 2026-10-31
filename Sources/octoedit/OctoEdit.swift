@@ -37,7 +37,7 @@ struct OctoEdit: AsyncParsableCommand {
           64 bad command-line arguments
           130 cancelled (Ctrl-C); finished clips stay, nothing partial is left
         """,
-        subcommands: [InitCommand.self, RenderCommand.self, SplitCommand.self, NameCommand.self, SpeakersCommand.self, GuideCommand.self]
+        subcommands: [InitCommand.self, RenderCommand.self, SplitCommand.self, NameCommand.self, SpeakersCommand.self, FacesCommand.self, GuideCommand.self]
     )
 }
 
@@ -51,6 +51,7 @@ struct Milliseconds: ExpressibleByArgument {
 }
 
 extension Codec: ExpressibleByArgument {}
+extension Framing: ExpressibleByArgument {}
 
 /// Writes progress and messages to stderr, keeping stdout for results.
 enum Console {

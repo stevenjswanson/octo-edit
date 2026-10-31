@@ -4,6 +4,7 @@ import Observation
 import Core
 import Load
 import Align
+import SpeakerFraming
 
 /// Per-window state: the project (a Core value, changed only through Core operations
 /// via `perform`), load issues, selection, and the source-video player.
@@ -75,6 +76,11 @@ final class DocumentModel {
     var suggesting = Set<ClipID>()
     @ObservationIgnored var warnedAboutNamer = false
     var showingExport = false
+    /// Face boxes through the video (cache/faces.tsv), for 9:16 framing and speaker portraits.
+    var faces: FaceTracks?
+    /// Finding faces in the background: progress 0…1.
+    var findingFaces: Double?
+    @ObservationIgnored var labelsCache: (key: Int, labels: FaceLabels)?
     /// Identify Speakers… progress (0…1) while it runs.
     var identifyingSpeakers: Double?
     var showingSpeakers = false
@@ -125,6 +131,7 @@ final class DocumentModel {
             self?.activePane = .preview
             self?.playheadMoved(t)
         }
+        preview.faceLabels = { [weak self] in self?.faceLabels }
         preview.onPlay = { [weak self] in
             self?.player.pause()
             self?.activePane = .preview
@@ -152,6 +159,7 @@ final class DocumentModel {
         playheadMoved(player.currentTime().seconds)
         // Packages made before the cache existed (or copied without it): rebuild it.
         if envelope == nil { analyzeWaveform() }
+        loadFaces()
     }
 
     func setSource(_ url: URL) {

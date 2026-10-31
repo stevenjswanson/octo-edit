@@ -6,7 +6,7 @@ import Foundation
 /// to which targets.
 @Suite struct DependencyRulesTests {
     static let projectModules: Set<String> = ["Core", "Align", "MarkupGrammar", "Naming", "Load", "Save",
-                                               "Ingest", "Transcribe", "Waveform", "Render", "Diarize"]
+                                               "Ingest", "Transcribe", "Waveform", "Render", "Diarize", "FaceTrack", "SpeakerFraming"]
 
     static let allowed: [String: Set<String>] = [
         "Core": [],
@@ -19,7 +19,9 @@ import Foundation
         "Transcribe": ["Core"],
         "Waveform": ["Core"],
         "Diarize": ["Core"],
-        "Render": ["Core"],
+        "FaceTrack": ["Core"],
+        "SpeakerFraming": ["Core"],
+        "Render": ["Core", "SpeakerFraming"],
     ]
 
     /// Framework → the only targets allowed to import it.
@@ -27,9 +29,10 @@ import Foundation
         "Speech": ["Transcribe"],
         "FoundationModels": ["Naming"],
         "FluidAudio": ["Diarize"],
-        "AVFoundation": ["Transcribe", "Waveform", "Diarize", "Render"],
-        "AVFAudio": ["Transcribe", "Waveform", "Diarize", "Render"],
-        "CoreMedia": ["Transcribe", "Waveform", "Diarize", "Render"],
+        "Vision": ["FaceTrack"],
+        "AVFoundation": ["Transcribe", "Waveform", "Diarize", "FaceTrack", "Render"],
+        "AVFAudio": ["Transcribe", "Waveform", "Diarize", "FaceTrack", "Render"],
+        "CoreMedia": ["Transcribe", "Waveform", "Diarize", "FaceTrack", "Render"],
         "Yams": ["Load"],
         "AppKit": [],
         "SwiftUI": [],

@@ -20,6 +20,8 @@ let package = Package(
         .library(name: "Render", targets: ["Render"]),
         .library(name: "Naming", targets: ["Naming"]),
         .library(name: "Diarize", targets: ["Diarize"]),
+        .library(name: "FaceTrack", targets: ["FaceTrack"]),
+        .library(name: "SpeakerFraming", targets: ["SpeakerFraming"]),
     ],
     dependencies: [
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
@@ -35,6 +37,8 @@ let package = Package(
         .target(name: "Align", dependencies: ["Core"]),
         .target(name: "MarkupGrammar", dependencies: ["Core"]),
         .target(name: "Naming", dependencies: ["Core"]),
+        // Which face is whose, and where a 9:16 column goes. Pure code.
+        .target(name: "SpeakerFraming", dependencies: ["Core"]),
 
         // Load / Save: the on-disk format.
         .target(name: "Load", dependencies: ["Core", "Align", "MarkupGrammar", "Yams"]),
@@ -48,15 +52,17 @@ let package = Package(
         // Who speaks when, from the voices alone. The only code that imports FluidAudio.
         .target(name: "Diarize", dependencies: ["Core", .product(name: "FluidAudio", package: "FluidAudio")],
                 swiftSettings: swift5),
+        // Faces through the video. The only code that imports Vision.
+        .target(name: "FaceTrack", dependencies: ["Core"], swiftSettings: swift5),
 
         // Render: composition + export.
-        .target(name: "Render", dependencies: ["Core"], swiftSettings: swift5),
+        .target(name: "Render", dependencies: ["Core", "SpeakerFraming"], swiftSettings: swift5),
 
         // CLI composition root.
         .executableTarget(
             name: "octoedit",
             dependencies: [
-                "Core", "Align", "Ingest", "Load", "Save", "Render", "Naming", "Transcribe", "Waveform", "Diarize",
+                "Core", "Align", "Ingest", "Load", "Save", "Render", "Naming", "Transcribe", "Waveform", "Diarize", "FaceTrack", "SpeakerFraming",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             swiftSettings: swift5
@@ -66,8 +72,9 @@ let package = Package(
         .testTarget(name: "AlignTests", dependencies: ["Core", "Align"]),
         .testTarget(name: "FormatTests", dependencies: ["Core", "Load", "Save", "MarkupGrammar"]),
         .testTarget(name: "IngestTests", dependencies: ["Core", "Ingest", "Align", "Waveform", "Transcribe"], swiftSettings: swift5),
-        .testTarget(name: "RenderTests", dependencies: ["Core", "Render"], swiftSettings: swift5),
+        .testTarget(name: "RenderTests", dependencies: ["Core", "Render", "SpeakerFraming"], swiftSettings: swift5),
         .testTarget(name: "NamingTests", dependencies: ["Core", "Naming"]),
+        .testTarget(name: "FramingTests", dependencies: ["Core", "SpeakerFraming", "MarkupGrammar"]),
         .testTarget(name: "ArchitectureTests"),
     ]
 )

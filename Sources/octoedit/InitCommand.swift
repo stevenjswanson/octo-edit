@@ -38,6 +38,9 @@ struct InitCommand: AsyncParsableCommand {
     @Option(help: "The roster, comma-separated; also turns on finding who speaks when.")
     var speakers: String?
 
+    @Flag(help: "Also find faces for 9:16 framing (as `octoedit faces`).")
+    var faces = false
+
     @Option(help: "Default lead-in before a clip's first word.")
     var pre: Milliseconds?
 
@@ -91,6 +94,7 @@ struct InitCommand: AsyncParsableCommand {
         try PackageWriter.save(result.project, to: pkg,
                                options: .init(words: result.words, envelope: result.envelope, zoomTranscript: zoomURL))
         let p = result.project
+        if faces { try await FacesCommand.build(pkg, source: videoURL, project: p) }
         let speakers = p.speakersInOrder()
         Console.note(String(format: "Transcribed %d words in %d paragraphs in %.0f s.", p.words.count, p.paragraphs.count,
                             Date().timeIntervalSince(started)))

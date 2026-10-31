@@ -105,6 +105,14 @@ enum MainMenu {
             m.addItem(i)
         }
         m.addItem(item("Give Selection to New Speaker…", #selector(ProjectDocument.assignNewSpeaker(_:))))
+        m.addItem(.separator())
+        let source = item("Framing: As Recorded", #selector(ProjectDocument.setFraming(_:)))
+        source.tag = 0
+        let portrait = item("Framing: 9:16, Following the Speaker", #selector(ProjectDocument.setFraming(_:)))
+        portrait.tag = 1
+        m.addItem(source)
+        m.addItem(portrait)
+        m.addItem(item("Find Faces", #selector(ProjectDocument.findFaces(_:))))
         return m
     }
 

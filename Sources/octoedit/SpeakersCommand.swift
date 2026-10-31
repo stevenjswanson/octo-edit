@@ -23,7 +23,7 @@ struct SpeakersCommand: AsyncParsableCommand {
         Prints turns shorter than a second: voice detection is least reliable there.
 
         EXAMPLE
-          octoedit speakers seminar.octoedit --speakers "Mia Minnes, Kathy, Ori, Leena, Steve Swanson"
+          octoedit speakers seminar.octoedit --speakers "Mia Minnes, Kathy, Ori, Leena, Steve Swanson" --faces
         """
     )
 
@@ -32,6 +32,9 @@ struct SpeakersCommand: AsyncParsableCommand {
 
     @Option(help: "The roster, comma-separated; replaces the one in transcript.md.")
     var speakers: String?
+
+    @Flag(help: "Also find faces for 9:16 framing (as `octoedit faces`).")
+    var faces = false
 
     func run() async throws {
         let pkg = URL(cliPath: package)
@@ -55,6 +58,7 @@ struct SpeakersCommand: AsyncParsableCommand {
         let report = await SpeakerID.identify(&p, turns: turns, cues: cues, namer: namer)
         try PackageWriter.save(p, to: pkg)
         Console.report(report)
+        if faces { try await FacesCommand.build(pkg, source: loaded.sourceURL, project: p) }
     }
 }
 

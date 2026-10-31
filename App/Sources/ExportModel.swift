@@ -85,7 +85,7 @@ final class ExportModel {
 
     var canExport: Bool { includedCount > 0 && (individualClips || supercut) && destination != nil }
 
-    func start(project: Project, source: URL, packageName: String) {
+    func start(project: Project, source: URL, packageName: String, faces: FaceTracks? = nil) {
         guard let dest = destination, !isExporting, canExport else { return }
         let chosen = project.clips.filter { c in rows.contains { $0.id == c.id && $0.include } }
         guard !chosen.isEmpty else { return }
@@ -110,7 +110,7 @@ final class ExportModel {
         task = Task {
             var done: [Renderer.Rendered] = []
             do {
-                let renderer = try await Renderer(project: project, source: source)
+                let renderer = try await Renderer(project: project, source: source, faces: faces)
                 for (n, clip) in chosen.enumerated() where individual {
                     try Task.checkCancellation()
                     let weight = clipSeconds[n]

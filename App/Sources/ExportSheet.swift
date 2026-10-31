@@ -21,7 +21,7 @@ struct ExportSheet: View {
                         Toggle("", isOn: $row.include).labelsHidden().disabled(export.isExporting)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(row.title).lineLimit(1)
-                            Text("\(row.slug)-\(export.label).mp4").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text("\(row.slug)-\(export.label)\(model.project.settings.framing == .portrait ? "-9x16" : "").mp4").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer()
                         status(row)
@@ -53,6 +53,17 @@ struct ExportSheet: View {
                     Text("720p (1280×720)").tag(Renderer.Resolution.hd720)
                 }
                 .pickerStyle(.radioGroup)
+                Picker("Framing", selection: Binding(get: { model.project.settings.framing }, set: { model.setFraming($0) })) {
+                    Text("As recorded").tag(Framing.source)
+                    Text("9:16, following the speaker").tag(Framing.portrait)
+                }
+                .pickerStyle(.radioGroup)
+                .disabled(!model.canEdit)
+                if model.project.settings.framing == .portrait && model.faces == nil {
+                    Text(model.findingFaces == nil ? "No face tracks yet: the column stays centred. Find Faces in the Speakers panel."
+                                                   : "Finding faces… exports made now keep the column centred.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 LabeledContent("Folder") {
                     HStack {
                         Text(export.destination?.path ?? "—").lineLimit(1).truncationMode(.middle)
@@ -132,7 +143,7 @@ struct ExportSheet: View {
                 Button("Export") {
                     guard let source = model.sourceURL else { return }
                     let name = model.packageURL?.deletingPathExtension().lastPathComponent ?? ""
-                    export.start(project: model.project, source: source, packageName: name)
+                    export.start(project: model.project, source: source, packageName: name, faces: model.faces)
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!export.canExport || model.sourceMissing || model.loadErrors)

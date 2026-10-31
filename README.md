@@ -18,8 +18,9 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | Command | What it does |
 |---|---|
 | `init --video V [--zoom Z] [--speakers "A, B"] [--pre 120ms --post 180ms --crossfade 20ms] [--codec hevc\|h264] PKG` | Transcribes V on this Mac (English, first audio track), tightens word edges against the audio, takes speakers and text from the Zoom `.vtt`, and writes an un-annotated `transcript.md`. `--speakers` sets the roster and also finds who speaks when (as `speakers` below). |
-| `speakers PKG [--speakers "A, B"]` | Finds who speaks when from the voices: every voice change starts a paragraph, and voices are named from the roster (or Speaker 1, 2, …). Resets every speaker name; markers stay on their words. Lists turns under a second to check. |
-| `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--dest DIR]` | Exports each clip as `SLUG.mp4` (input resolution and frame rate, hardware-encoded) plus `SLUG.vtt` captions and a `notes.md`. `--check` only validates; `--preview` makes fast 720p `SLUG.preview.mp4` files in `exports/preview/`. |
+| `faces PKG` | Finds faces through the video into `cache/faces.tsv` (about ⅓ of the video's length for 4K), for 9:16 framing. `init` and `speakers` take `--faces` to do this too. |
+| `speakers PKG [--speakers "A, B"] [--faces]` | Finds who speaks when from the voices: every voice change starts a paragraph, and voices are named from the roster (or Speaker 1, 2, …). Resets every speaker name; markers stay on their words. Lists turns under a second to check. |
+| `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--framing source\|9:16] [--dest DIR]` | Exports each clip as `SLUG.mp4` (input resolution and frame rate, hardware-encoded) plus `SLUG.vtt` captions and a `notes.md`. `--check` only validates; `--preview` makes fast 720p `SLUG.preview.mp4` files in `exports/preview/`. |
 | `name PKG [--clip SLUG]… [--apply [--all]]` | Suggests titles with Apple's on-device model into the front matter. `--apply` names unnamed clips; `--all` renames every clip. |
 
 ## Marking up `transcript.md`
@@ -44,7 +45,7 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | `> (00:00:02.1) **Speaker:**` | Zoom-only text (said before or after the recording); can't contain markers. |
 | `[00:23:46.3] **Speaker:**` | Starts a paragraph. Each paragraph has one speaker; to change who said some words, split the paragraph and give the new part its own header. |
 | `speakers: [Mia Minnes, Kathy]` (front matter) | The roster of speaker names. Header names missing from it are added on load; the tool writes it in order of first appearance, with unused names last. |
-| `defaults: { …, framing: "9:16" }` (front matter) | Output shape: `source` (default, as the video came in) or `"9:16"` (a full-height column that follows the speaker). Stored, but not yet applied by `render`. |
+| `defaults: { …, framing: "9:16" }` (front matter) | Output shape: `source` (default, as the video came in) or `"9:16"` (a full-height column centred on whoever is speaking, panning when the speaker changes; needs `octoedit faces`). Exports are named `SLUG-4k-9x16.*`. |
 
 Edit the words freely: timing is re-attached on every load by aligning the text with
 `words.tsv`, so fixing a misheard word keeps its timing and deleting one shifts nothing.
@@ -60,7 +61,7 @@ meeting.octoedit/
   transcript.md   text + edit markers (the document)
   words.tsv       timed words from ingest; never rewritten
   *.vtt           the original Zoom transcript
-  cache/          regenerable (waveform.bin)
+  cache/          regenerable (waveform.bin, faces.tsv: face boxes, no fingerprints)
   exports/        rendered clips
 ```
 
@@ -74,6 +75,6 @@ swift test                      # unit tests; integration tests run when fixture
 ```
 
 Components (one SwiftPM target each): `Core` (model, no I/O), `Ingest`, `Load`, `Save`,
-`Render`, plus shared `Align`, `MarkupGrammar`, `Naming`, and the framework-bound
-`Transcribe`, `Waveform` and `Diarize` (FluidAudio, the only third-party audio code;
+`Render`, plus shared `Align`, `MarkupGrammar`, `Naming`, `SpeakerFraming` (whose face is whose, and the 9:16 column), and the framework-bound
+`Transcribe`, `Waveform`, `FaceTrack` (Vision) and `Diarize` (FluidAudio, the only third-party audio code;
 its 21 MB of models download once on first use). `ArchitectureTests` enforces which may import which.

@@ -294,6 +294,11 @@ final class ProjectDocument: NSDocument {
         guard let n = (sender as? NSMenuItem)?.tag else { return }
         MainActor.assumeIsolated { model.assignSelection(toSpeakerAt: n) }
     }
+    @objc func setFraming(_ sender: Any?) {
+        let framing: Framing = (sender as? NSMenuItem)?.tag == 1 ? .portrait : .source
+        MainActor.assumeIsolated { model.setFraming(framing) }
+    }
+    @objc func findFaces(_ sender: Any?) { MainActor.assumeIsolated { model.findFaces() } }
     @objc func assignNewSpeaker(_ sender: Any?) {
         let window = windowControllers.first?.window
         MainActor.assumeIsolated {
@@ -360,6 +365,12 @@ final class ProjectDocument: NSDocument {
                 return transcriptFocused && m.canEdit && m.selection != nil
             }
         }
+        if item.action == #selector(setFraming(_:)), let menuItem = item as? NSMenuItem {
+            return MainActor.assumeIsolated {
+                menuItem.state = (m.project.settings.framing == .portrait) == (menuItem.tag == 1) ? .on : .off
+                return m.canEdit
+            }
+        }
         let enabled: Bool? = MainActor.assumeIsolated {
             switch item.action {
             case #selector(makeClip(_:)): m.canEdit && m.canMakeClip
@@ -378,6 +389,7 @@ final class ProjectDocument: NSDocument {
             case #selector(showSpeakers(_:)): true
             case #selector(identifySpeakers(_:)): m.canEdit && m.identifyingSpeakers == nil && !m.sourceMissing
             case #selector(assignNewSpeaker(_:)): m.canEdit && m.selection != nil
+            case #selector(findFaces(_:)): m.findingFaces == nil && !m.sourceMissing
             default: nil
             }
         }

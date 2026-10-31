@@ -2,6 +2,7 @@ import AVFoundation
 import Observation
 import Core
 import Render
+import SpeakerFraming
 
 /// The clip preview: plays the selected clip's composition — built by Render's
 /// CompositionBuilder, the same code export uses, so preview and export can't differ.
@@ -24,6 +25,11 @@ final class PreviewModel {
     @ObservationIgnored private var sourceDuration: Double?
     @ObservationIgnored private var built: CompositionBuilder.Output?
     @ObservationIgnored private var shownSegments: [ResolvedSegment] = []
+    @ObservationIgnored private var shownColumn: ColumnPath?
+    /// Whose face is where, for the 9:16 column (nil: a centred column).
+    @ObservationIgnored var faceLabels: () -> FaceLabels? = { nil }
+    /// The source frame's width ÷ height.
+    @ObservationIgnored private var aspect = 16.0 / 9.0
     @ObservationIgnored private var pendingSeek: Double?
     @ObservationIgnored private var job: Task<Void, Never>?
     @ObservationIgnored private var timeObserver: Any?
@@ -77,6 +83,13 @@ final class PreviewModel {
         shownSegments = []
         if let asset {
             Task { sourceDuration = try? await asset.load(.duration).seconds }
+            Task {
+                if let track = try? await asset.loadTracks(withMediaType: .video).first,
+                   let (size, transform) = try? await (track.load(.naturalSize), track.load(.preferredTransform)) {
+                    let shown = size.applying(transform)
+                    if shown.height != 0 { aspect = abs(shown.width / shown.height) }
+                }
+            }
         }
     }
 
@@ -98,8 +111,13 @@ final class PreviewModel {
         title = clip.name ?? project.slug(of: clip.id) ?? "Clip"
         let segs = project.resolvedSegments(of: clip, sourceDuration: sourceDuration)
         guard !segs.isEmpty else { clear(message: "This clip has no timed words."); clipID = clip.id; return }
+        // With 9:16 framing the preview plays the cropped column, exactly as exported.
+        let column = project.settings.framing == .portrait
+            ? ColumnPath(segments: segs.map { ($0.start, $0.end) }, timeline: SpeechTimeline(project),
+                         labels: faceLabels(), aspect: aspect)
+            : nil
         let sameClip = clip.id == clipID
-        guard !sameClip || segs != shownSegments else { return }
+        guard !sameClip || segs != shownSegments || column != shownColumn else { return }
         // Same clip edited: stay at the same moment of the recording (not the same clip
         // time, which shifts when material before it is cut).
         let wasPlaying = player.rate != 0
@@ -116,6 +134,7 @@ final class PreviewModel {
         if wasPlaying { player.pause() }
         clipID = clip.id
         shownSegments = segs
+        shownColumn = column
         message = nil
         // Seeks that arrive before the new composition exists wait for it.
         if !sameClip { built = nil }
@@ -124,10 +143,11 @@ final class PreviewModel {
         let crossfade = project.settings.crossfade
         job = Task {
             do {
-                let out = try await CompositionBuilder.build(asset: asset, segments: segs, crossfade: crossfade)
+                let out = try await CompositionBuilder.build(asset: asset, segments: segs, crossfade: crossfade, column: column)
                 try Task.checkCancellation()
                 let item = AVPlayerItem(asset: out.composition)
                 item.audioMix = out.audioMix
+                item.videoComposition = out.videoComposition
                 built = out
                 player.replaceCurrentItem(with: item)
                 segments = zip(out.segmentStarts, out.sourceRanges).map { ($0, $1.duration) }

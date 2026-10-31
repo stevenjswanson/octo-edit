@@ -42,6 +42,11 @@ public enum PackageReader {
                       sourceURL: resolveSource(parsed.project.source, package: package))
     }
 
+    /// The face-track cache, if it has been built.
+    public static func loadFaces(_ package: URL) -> FaceTracks? {
+        (try? String(contentsOf: package.appendingPathComponent(PackageLayout.faces), encoding: .utf8)).flatMap(FacesFile.decode)
+    }
+
     public static func resolveSource(_ source: String, package: URL) -> URL {
         if source.hasPrefix("/") { return URL(fileURLWithPath: source) }
         if source.hasPrefix("~") { return URL(fileURLWithPath: (source as NSString).expandingTildeInPath) }

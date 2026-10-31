@@ -40,6 +40,10 @@ targets:
         product: Naming
       - package: OctoEditKit
         product: Diarize
+      - package: OctoEditKit
+        product: FaceTrack
+      - package: OctoEditKit
+        product: SpeakerFraming
     info:
       path: Generated/Info.plist
       properties:

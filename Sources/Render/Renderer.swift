@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import Core
+import SpeakerFraming
 
 /// Renders a project's clips and their sidecars.
 public struct Renderer {
@@ -15,11 +16,14 @@ public struct Renderer {
         public var codec: Codec?
         public var preview = false
         public var resolution: Resolution = .full
+        /// nil = the project's `defaults.framing`.
+        public var framing: Framing?
 
-        public init(codec: Codec? = nil, preview: Bool = false, resolution: Resolution = .full) {
+        public init(codec: Codec? = nil, preview: Bool = false, resolution: Resolution = .full, framing: Framing? = nil) {
             self.codec = codec
             self.preview = preview
             self.resolution = resolution
+            self.framing = framing
         }
     }
 
@@ -39,7 +43,22 @@ public struct Renderer {
     /// `<slug>-4k` (or `-720p`, …), the base name of an export's .mp4 and .vtt;
     /// previews are `<slug>.preview`.
     public func baseName(_ slug: String, _ options: Options) -> String {
-        options.preview ? slug + ".preview" : slug + "-" + resolutionLabel(options.resolution)
+        let shape = framing(options) == .portrait ? "-9x16" : ""
+        return options.preview ? slug + shape + ".preview" : slug + "-" + resolutionLabel(options.resolution) + shape
+    }
+
+    public func framing(_ options: Options) -> Framing { options.framing ?? project.settings.framing }
+
+    /// The 9:16 column over these segments, or nil to keep the frame as it came in.
+    func column(_ segments: [ResolvedSegment], _ options: Options) -> ColumnPath? {
+        guard framing(options) == .portrait else { return nil }
+        let labels = faces.map { FaceLabels(faces: $0, project: project) }
+        return ColumnPath(segments: segments.map { ($0.start, $0.end) }, timeline: SpeechTimeline(project), labels: labels,
+                          aspect: Double(info.width) / Double(max(info.height, 1)))
+    }
+
+    func outputHeight(_ options: Options) -> Int? {
+        options.preview || options.resolution == .hd720 ? 1280 : nil
     }
 
     private func quality(_ options: Options) -> ClipExporter.Quality {
@@ -71,11 +90,14 @@ public struct Renderer {
     public let project: Project
     public let source: URL
     public let info: SourceInfo
+    /// Face tracks for 9:16 framing; without them the column stays centred.
+    public let faces: FaceTracks?
 
-    public init(project: Project, source: URL) async throws {
+    public init(project: Project, source: URL, faces: FaceTracks? = nil) async throws {
         guard FileManager.default.fileExists(atPath: source.path) else { throw RenderError.missingSource(source.path) }
         self.project = project
         self.source = source
+        self.faces = faces
         self.info = try await SourceInfo.read(source)
     }
 
@@ -88,7 +110,8 @@ public struct Renderer {
         let segments = project.resolvedSegments(of: clip, sourceDuration: info.duration)
         guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
         let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
-                                                       crossfade: project.settings.crossfade)
+                                                       crossfade: project.settings.crossfade,
+                                                       column: column(segments, options), outputHeight: outputHeight(options))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(baseName(slug, options) + ".mp4")
         let quality = quality(options)
@@ -136,7 +159,8 @@ public struct Renderer {
         let segments = perClip.flatMap { $0 }
         guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
         let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
-                                                       crossfade: project.settings.crossfade)
+                                                       crossfade: project.settings.crossfade,
+                                                       column: column(segments, options), outputHeight: outputHeight(options))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(baseName(slug, options) + ".mp4")
         let quality = quality(options)

@@ -1,9 +1,14 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 import Core
 import Ingest
+import Load
+import Save
 import Naming
 import Diarize
+import FaceTrack
+import SpeakerFraming
 
 /// Speaker colours follow first-appearance order (the Speakers panel's order).
 enum SpeakerPalette {
@@ -118,6 +123,7 @@ extension DocumentModel {
 /// editable name (renames everywhere), speaking time, Merge into… and Remove.
 struct SpeakersPanel: View {
     @Bindable var model: DocumentModel
+    @State private var portraits = SpeakerPortraits()
 
     var body: some View {
         let order = model.speakerOrder
@@ -129,7 +135,8 @@ struct SpeakersPanel: View {
                     .font(.caption).foregroundStyle(.secondary).frame(width: 280, alignment: .leading)
             }
             ForEach(Array(order.enumerated()), id: \.element) { n, name in
-                SpeakerRow(model: model, index: n, name: name, seconds: time[name] ?? 0, others: order.filter { $0 != name })
+                SpeakerRow(model: model, index: n, name: name, seconds: time[name] ?? 0, others: order.filter { $0 != name },
+                           portrait: portraits.images[name])
             }
             Divider()
             HStack {
@@ -140,11 +147,20 @@ struct SpeakersPanel: View {
                 Button("Identify Speakers…") { model.identifyRequest = true; model.showingSpeakers = false }
                     .disabled(model.identifyingSpeakers != nil || model.sourceMissing)
             }
+            if let f = model.findingFaces {
+                HStack { ProgressView(value: f).frame(width: 80); Text("Finding faces…").font(.caption).foregroundStyle(.secondary) }
+            } else if model.faces == nil {
+                Button("Find Faces") { model.findFaces() }.disabled(model.sourceMissing)
+                    .help("Scan the video for faces: speaker portraits here, and 9:16 framing that follows the speaker")
+            }
             Text("⌥1–9 give the selected words to speaker 1–9.").font(.caption).foregroundStyle(.secondary)
         }
         .padding(12)
         .frame(minWidth: 320)
         .disabled(!model.canEdit)
+        .task(id: model.revision + (model.faces == nil ? 0 : 1_000_000)) {
+            portraits.update(model.faceLabels, source: model.sourceURL)
+        }
     }
 }
 
@@ -154,12 +170,17 @@ private struct SpeakerRow: View {
     let name: String
     let seconds: Double
     let others: [String]
+    let portrait: NSImage?
     @State private var text = ""
 
     var body: some View {
         HStack(spacing: 8) {
             Text(index < 9 ? "⌥\(index + 1)" : "").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 22)
             Circle().fill(SpeakerPalette.color(index)).frame(width: 10, height: 10)
+            Group {
+                if let portrait { Image(nsImage: portrait).resizable() } else { Image(systemName: "person.crop.square").resizable().foregroundStyle(.tertiary) }
+            }
+            .frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 4))
             TextField("Name", text: $text)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(commit)
@@ -217,6 +238,90 @@ struct IdentifySpeakersSheet: View {
         .frame(width: 440)
         .onAppear {
             roster = model.project.speakers.filter { !Roster.isPlaceholder($0) }.joined(separator: ", ")
+        }
+    }
+}
+
+// MARK: Faces
+
+extension DocumentModel {
+    /// Reads cache/faces.tsv off the main thread; when it's missing and the project has
+    /// speakers, finds faces in the background (about a third of the video's length).
+    func loadFaces() {
+        guard let package = packageURL else { return }
+        Task.detached(priority: .utility) {
+            let loaded = PackageReader.loadFaces(package)
+            await MainActor.run {
+                if let loaded { self.faces = loaded; self.refreshPreviewNow() } else if !self.project.speakersInOrder().isEmpty { self.findFaces() }
+            }
+        }
+    }
+
+    func findFaces() {
+        guard findingFaces == nil, let url = sourceURL, !sourceMissing, let package = packageURL else { return }
+        findingFaces = 0
+        Task {
+            defer { findingFaces = nil }
+            do {
+                let found = try await VisionFaceScanner().scan(video: url) { f in
+                    Task { @MainActor in if self.findingFaces != nil { self.findingFaces = f } }
+                }
+                faces = found
+                try? PackageWriter.saveFaces(found, to: package)
+                refreshPreviewNow()
+            } catch {
+                flash("Couldn’t find faces: \(error)")
+            }
+        }
+    }
+
+    func setFraming(_ framing: Framing) {
+        perform("Framing") { $0.settings.framing = framing }
+    }
+
+    /// Which face is whose, from the current paragraph speakers; recomputed only when
+    /// the faces or the speakers' words change.
+    var faceLabels: FaceLabels? {
+        guard let faces else { return nil }
+        var h = Hasher()
+        h.combine(faces.frames.count)
+        for p in project.paragraphs { h.combine(p.id.raw); h.combine(p.speaker) }
+        h.combine(project.words.count)
+        let key = h.finalize()
+        if let cached = labelsCache, cached.key == key { return cached.labels }
+        let labels = FaceLabels(faces: faces, project: project)
+        labelsCache = (key, labels)
+        return labels
+    }
+}
+
+/// One face per speaker for the Speakers panel, cut from the video in memory.
+@MainActor @Observable
+final class SpeakerPortraits {
+    private(set) var images: [String: NSImage] = [:]
+    @ObservationIgnored private var requested: [String: Double] = [:]
+
+    func update(_ labels: FaceLabels?, source: URL?) {
+        guard let labels, let source else { return }
+        let asset = AVURLAsset(url: source)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        for (name, sample) in labels.portraits() {
+            if requested[name] == sample.t { continue }
+            requested[name] = sample.t
+            Task {
+                guard let cg = try? await generator.image(at: CMTime(seconds: sample.t, preferredTimescale: 600)).image,
+                      requested[name] == sample.t else { return }
+                let b = sample.box
+                // A square around the face, a bit larger than the face itself.
+                let side = b.h * Double(cg.height) * 1.8
+                let rect = CGRect(x: b.centerX * Double(cg.width) - side / 2, y: b.centerY * Double(cg.height) - side / 2,
+                                  width: side, height: side).intersection(CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+                guard let crop = cg.cropping(to: rect) else { return }
+                images[name] = NSImage(cgImage: crop, size: NSSize(width: 32, height: 32))
+            }
         }
     }
 }

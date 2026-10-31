@@ -4,7 +4,7 @@ import Core
 
 /// Exports one clip with the hardware encoder.
 public enum ClipExporter {
-    public enum Quality: Sendable {
+    public enum Quality: Sendable, Equatable {
         /// Same resolution and frame rate as the input; codec from settings or the input's.
         case full(Codec)
         /// 1280×720 H.264 (there is no 720p HEVC preset), same frame rate.
@@ -43,14 +43,21 @@ public enum ClipExporter {
     /// if the calling task is cancelled.
     public static func export(_ built: CompositionBuilder.Output, info: SourceInfo, quality: Quality, to url: URL,
                               progress: @escaping @Sendable (Double) -> Void) async throws {
-        guard let session = AVAssetExportSession(asset: built.composition, presetName: preset(for: info, quality: quality)) else {
+        // A cropped frame matches no fixed-size preset; these keep the render size.
+        let presetName = built.videoComposition == nil ? preset(for: info, quality: quality)
+            : quality == .full(.hevc) ? AVAssetExportPresetHEVCHighestQuality : AVAssetExportPresetHighestQuality
+        guard let session = AVAssetExportSession(asset: built.composition, presetName: presetName) else {
             throw RenderError.exportFailed("no export session for this source")
         }
         session.audioMix = built.audioMix
         // A video composition forces a real re-encode. Without it AVFoundation may pass
         // the source's GOPs through and hide the extra frames with edit lists, which many
         // players and upload sites ignore (stray frames at every cut).
-        session.videoComposition = try await AVVideoComposition.videoComposition(withPropertiesOf: built.composition)
+        if let crop = built.videoComposition {
+            session.videoComposition = crop
+        } else {
+            session.videoComposition = try await AVVideoComposition.videoComposition(withPropertiesOf: built.composition)
+        }
         try await run(session, to: url, progress: progress)
     }
 

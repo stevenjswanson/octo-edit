@@ -175,6 +175,26 @@ func samples(_ url: URL) async throws -> [Float] {
         #expect(CMFormatDescriptionGetMediaSubType(formats[0]) == kCMVideoCodecType_H264)
     }
 
+    /// 9:16 framing: a full-height 1215×2160 column from 4K, named -4k-9x16; 720×1280 at 720p.
+    @Test(.enabled(if: haveTone)) func portraitFramingCropsAFullHeightColumn() async throws {
+        let src = fixture("tone-4k.mp4")
+        var p = secondsProject(source: src.path)
+        p.settings.framing = .portrait
+        let c = try p.makeClip(words: 2...3, name: "Tone test")
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let r = try await Renderer(project: p, source: src)
+        for (options, name, size) in [(Renderer.Options(), "tone-test-4k-9x16.mp4", CGSize(width: 1216, height: 2160)),
+                                      (Renderer.Options(resolution: .hd720), "tone-test-720p-9x16.mp4", CGSize(width: 720, height: 1280))] {
+            let out = try await r.render(p.clip(c)!, into: dir, options: options)
+            #expect(out.file.lastPathComponent == name)
+            let v = try await AVURLAsset(url: out.file).loadTracks(withMediaType: .video)[0]
+            #expect(try await v.load(.naturalSize) == size)
+        }
+        let plain = try await r.render(p.clip(c)!, into: dir, options: .init(resolution: .hd720, framing: .source))
+        #expect(plain.file.lastPathComponent == "tone-test-720p.mp4")
+    }
+
     @Test(.enabled(if: haveTone)) func cancellingLeavesNoFiles() async throws {
         let src = fixture("tone-4k.mp4")
         var p = secondsProject(source: src.path)

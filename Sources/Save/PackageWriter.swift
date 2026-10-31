@@ -59,6 +59,13 @@ public enum PackageWriter {
         try WaveformFile.encode(envelope).write(to: package.appendingPathComponent(PackageLayout.waveform), options: .atomic)
     }
 
+    /// Writes only the face-track cache.
+    public static func saveFaces(_ faces: FaceTracks, to package: URL) throws {
+        try FileManager.default.createDirectory(at: package.appendingPathComponent(PackageLayout.cacheDir),
+                                                withIntermediateDirectories: true)
+        try write(FacesFile.encode(faces), to: package.appendingPathComponent(PackageLayout.faces))
+    }
+
     /// The source path as it should be written: relative to the package when the video
     /// lives beside the package (same parent folder tree), absolute otherwise.
     public static func storedSourcePath(_ source: String, package: URL) -> String {

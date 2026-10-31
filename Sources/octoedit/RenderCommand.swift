@@ -15,6 +15,9 @@ struct RenderCommand: AsyncParsableCommand {
         one video whose .md has YouTube chapters.
         Use --check to validate transcript.md without rendering, and --preview for fast
         720p <slug>.preview.mp4 versions in exports/preview/.
+        With framing 9:16 (front matter `defaults: { framing: "9:16" }`, or --framing),
+        clips are a full-height 9:16 column that follows whoever is speaking, named
+        <slug>-4k-9x16.*; build face tracks first with `octoedit faces`.
 
         EXAMPLES
           octoedit render --check seminar.octoedit           validate; list the clips
@@ -46,6 +49,9 @@ struct RenderCommand: AsyncParsableCommand {
 
     @Option(help: "Output codec (default: the project's, else same as the input).")
     var codec: Codec?
+
+    @Option(help: "Output shape for this run: source or 9:16 (default: the project's defaults.framing).")
+    var framing: Framing?
 
     @Flag(name: .customLong("720p"), help: "Export at 1280×720 (H.264) instead of the input's resolution.")
     var hd720 = false
@@ -107,9 +113,14 @@ struct RenderCommand: AsyncParsableCommand {
             return
         }
 
-        let renderer = try await Renderer(project: p, source: loaded.sourceURL)
+        let options = Renderer.Options(codec: codec, preview: preview, resolution: hd720 ? .hd720 : .full, framing: framing)
+        var faces: FaceTracks?
+        if (framing ?? p.settings.framing) == .portrait {
+            faces = PackageReader.loadFaces(pkg)
+            if faces == nil { Console.note("No face tracks yet, so the 9:16 column stays centred. Run `octoedit faces` first.") }
+        }
+        let renderer = try await Renderer(project: p, source: loaded.sourceURL, faces: faces)
         let outDir = dest.map(URL.init(cliPath:)) ?? pkg.appendingPathComponent(preview ? "exports/preview" : "exports")
-        let options = Renderer.Options(codec: codec, preview: preview, resolution: hd720 ? .hd720 : .full)
         let preview = preview
         let supercut = supercut
         let json = json
