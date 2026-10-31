@@ -58,24 +58,6 @@ struct SpeakersCommand: AsyncParsableCommand {
     }
 }
 
-enum Roster {
-    /// "Mia Minnes, Kathy, Ori" → names, trimmed, blanks and repeats dropped.
-    static func parse(_ s: String) -> [String] {
-        var out: [String] = []
-        for part in s.split(separator: ",") {
-            let n = part.trimmingCharacters(in: .whitespaces)
-            if !n.isEmpty, !out.contains(n) { out.append(n) }
-        }
-        return out
-    }
-
-    /// `Speaker 3`: a name a previous run made up, not a real one.
-    static func isPlaceholder(_ name: String) -> Bool {
-        let n = name.dropFirst("Speaker ".count)
-        return name.hasPrefix("Speaker ") && !n.isEmpty && n.allSatisfy(\.isNumber)
-    }
-}
-
 extension Console {
     static func report(_ r: SpeakerID.Report) {
         let voices = r.names.keys.sorted { (r.seconds[$0] ?? 0) > (r.seconds[$1] ?? 0) }

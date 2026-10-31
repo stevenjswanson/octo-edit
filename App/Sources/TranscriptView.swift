@@ -12,6 +12,10 @@ extension NSAttributedString.Key {
     static let octoParagraph = NSAttributedString.Key("octoParagraph")
     /// On a paragraph header line (time and speaker), including its newline.
     static let octoHeader = NSAttributedString.Key("octoHeader")
+    /// On the speaker name in a header line (clicking it opens the speaker menu).
+    static let octoSpeakerName = NSAttributedString.Key("octoSpeakerName")
+    /// The speaker's colour, on every character of a paragraph with a speaker (the gutter stripe).
+    static let octoStripe = NSAttributedString.Key("octoStripe")
 }
 
 /// A clip start (▶) or end (◀) marker in the transcript.
@@ -152,7 +156,7 @@ struct TranscriptView: NSViewRepresentable {
         /// must not make every run look changed (that would relayout everything).
         static let styledKeys: [NSAttributedString.Key] = [
             .font, .foregroundColor, .backgroundColor, .paragraphStyle, .strikethroughStyle,
-            .octoWord, .octoMarkerClip, .octoMarkerIn, .octoParagraph, .octoHeader,
+            .octoWord, .octoMarkerClip, .octoMarkerIn, .octoParagraph, .octoHeader, .octoSpeakerName, .octoStripe,
         ]
 
         static func sameStyling(_ a: [NSAttributedString.Key: Any], _ b: [NSAttributedString.Key: Any]) -> Bool {
@@ -550,8 +554,12 @@ final class WordTextView: NSTextView {
     private var editing: Bool { coordinator?.editing ?? false }
 
     override func mouseDown(with event: NSEvent) {
-        if editing { return super.mouseDown(with: event) }
         let point = convert(event.locationInWindow, from: nil)
+        if event.clickCount == 1, let pid = speakerName(at: point), let menu = speakerMenu(for: pid) {
+            menu.popUp(positioning: nil, at: point, in: self)
+            return
+        }
+        if editing { return super.mouseDown(with: event) }
         if let marker = marker(at: point) {
             if event.clickCount == 2, let coordinator, let b = coordinator.model.boundary(for: marker) {
                 coordinator.model.inspect(b)
@@ -708,29 +716,104 @@ final class WordTextView: NSTextView {
         }
     }
 
-    @objc private func setSpeakerFromMenu(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? Int, let model = coordinator?.model, let window else { return }
-        let pid = ParagraphID(raw)
-        let current = model.project.paragraph(pid)?.speaker ?? ""
-        let alert = NSAlert()
-        alert.messageText = "Speaker"
-        alert.informativeText = "Leave empty for no speaker."
-        let field = NSTextField(string: current)
-        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
-        let everywhere = NSButton(checkboxWithTitle: current.isEmpty ? "Every paragraph without a speaker"
-                                                                      : "Every paragraph by “\(current)”",
-                                  target: nil, action: nil)
-        let stack = NSStackView(views: [field, everywhere])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.frame = NSRect(x: 0, y: 0, width: 260, height: 52)
-        alert.accessoryView = stack
-        alert.addButton(withTitle: "Set")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            model.setSpeaker(of: pid, to: field.stringValue, everywhere: everywhere.state == .on)
+    /// The paragraph whose header speaker name is at `point`.
+    private func speakerName(at point: NSPoint) -> ParagraphID? {
+        guard let storage = textStorage, storage.length > 0, let lm = layoutManager, let tc = textContainer else { return nil }
+        let local = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        var fraction: CGFloat = 0
+        let g = lm.glyphIndex(for: local, in: tc, fractionOfDistanceThroughGlyph: &fraction)
+        guard lm.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: tc).insetBy(dx: -2, dy: -2).contains(local) else { return nil }
+        let i = lm.characterIndexForGlyph(at: g)
+        guard i < storage.length, storage.attribute(.octoSpeakerName, at: i, effectiveRange: nil) != nil,
+              let raw = storage.attribute(.octoParagraph, at: i, effectiveRange: nil) as? Int else { return nil }
+        return ParagraphID(raw)
+    }
+
+    /// The header menu: the roster (in panel order, with colours), No Speaker,
+    /// New Speaker… and Rename “X”… (everywhere).
+    func speakerMenu(for pid: ParagraphID) -> NSMenu? {
+        guard let model = coordinator?.model, let para = model.project.paragraph(pid), !para.zoomOnly else { return nil }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let enabled = model.canEdit
+        for (n, name) in model.speakerOrder.enumerated() {
+            let item = NSMenuItem(title: name, action: #selector(pickSpeaker(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = SpeakerChoice(paragraph: pid, name: name)
+            item.image = Self.swatch(SpeakerPalette.nsColor(n))
+            item.state = para.speaker == name ? .on : .off
+            item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        let none = NSMenuItem(title: "No Speaker", action: #selector(pickSpeaker(_:)), keyEquivalent: "")
+        none.target = self
+        none.representedObject = SpeakerChoice(paragraph: pid, name: nil)
+        none.state = para.speaker == nil ? .on : .off
+        none.isEnabled = enabled
+        menu.addItem(none)
+        menu.addItem(.separator())
+        let new = NSMenuItem(title: "New Speaker…", action: #selector(newSpeaker(_:)), keyEquivalent: "")
+        new.target = self
+        new.representedObject = pid.raw
+        new.isEnabled = enabled
+        menu.addItem(new)
+        if let current = para.speaker {
+            let rename = NSMenuItem(title: "Rename “\(current)”…", action: #selector(renameSpeaker(_:)), keyEquivalent: "")
+            rename.target = self
+            rename.representedObject = current
+            rename.isEnabled = enabled
+            menu.addItem(rename)
+        }
+        return menu
+    }
+
+    final class SpeakerChoice: NSObject {
+        let paragraph: ParagraphID
+        let name: String?
+        init(paragraph: ParagraphID, name: String?) { self.paragraph = paragraph; self.name = name }
+    }
+
+    static func swatch(_ color: NSColor) -> NSImage {
+        NSImage(size: NSSize(width: 10, height: 10), flipped: false) { r in
+            color.setFill()
+            NSBezierPath(ovalIn: r).fill()
+            return true
+        }
+    }
+
+    @objc private func pickSpeaker(_ sender: NSMenuItem) {
+        guard let choice = sender.representedObject as? SpeakerChoice else { return }
+        coordinator?.model.setSpeaker(of: choice.paragraph, to: choice.name)
+    }
+
+    @objc private func newSpeaker(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? Int, let model = coordinator?.model else { return }
+        model.askForSpeakerName(title: "New speaker", button: "Add", in: window) { name in
+            model.setSpeaker(of: ParagraphID(raw), to: name)
+        }
+    }
+
+    @objc private func renameSpeaker(_ sender: NSMenuItem) {
+        guard let old = sender.representedObject as? String, let model = coordinator?.model else { return }
+        model.askForSpeakerName(title: "Rename “\(old)” everywhere", initial: old, button: "Rename", in: window) { name in
+            model.renameSpeaker(old, to: name)
+        }
+    }
+
+    /// The gutter stripe: a thin bar in the speaker's colour beside each paragraph.
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let storage = textStorage, storage.length > 0, let lm = layoutManager, let tc = textContainer else { return }
+        let origin = textContainerOrigin
+        let glyphs = lm.glyphRange(forBoundingRect: rect.offsetBy(dx: -origin.x, dy: -origin.y), in: tc)
+        let chars = lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        storage.enumerateAttribute(.octoStripe, in: chars) { value, range, _ in
+            guard let color = value as? NSColor else { return }
+            // Leave out the trailing newline so the bar stops at the last line of text.
+            let r = NSRange(location: range.location, length: max(range.length - 1, 1))
+            let box = lm.boundingRect(forGlyphRange: lm.glyphRange(forCharacterRange: r, actualCharacterRange: nil), in: tc)
+            color.withAlphaComponent(0.7).setFill()
+            NSRect(x: origin.x - 12, y: box.minY + origin.y, width: 3, height: box.height).fill()
         }
     }
 
@@ -762,16 +845,11 @@ final class WordTextView: NSTextView {
     override func menu(for event: NSEvent) -> NSMenu? {
         // On a paragraph header: set its speaker.
         let point = convert(event.locationInWindow, from: nil)
-        if let storage = textStorage, storage.length > 0, let coordinator {
+        if let storage = textStorage, storage.length > 0 {
             let i = min(characterIndexForInsertion(at: point), storage.length - 1)
             if storage.attribute(.octoHeader, at: i, effectiveRange: nil) != nil,
-               let raw = storage.attribute(.octoParagraph, at: i, effectiveRange: nil) as? Int {
-                let menu = NSMenu()
-                let item = NSMenuItem(title: "Set Speaker…", action: #selector(setSpeakerFromMenu(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = raw
-                item.isEnabled = !coordinator.model.loadErrors
-                menu.addItem(item)
+               let raw = storage.attribute(.octoParagraph, at: i, effectiveRange: nil) as? Int,
+               let menu = speakerMenu(for: ParagraphID(raw)) {
                 return menu
             }
         }
@@ -834,6 +912,7 @@ enum TranscriptText {
             closes[r.upperBound] = (n, clip)
         }
         let slugs = p.slugs()
+        let speakerOrder = p.speakersInOrder()
         let selectedOrdinal = selectedClip.flatMap { id in p.clips.firstIndex { $0.id == id } }
         func band(_ n: Int) -> NSColor {
             let emphasis: CGFloat = selectedOrdinal == nil ? 0.16 : (n == selectedOrdinal ? 0.26 : 0.08)
@@ -858,13 +937,23 @@ enum TranscriptText {
 
             if let t = p.words[i..<j].first(where: { $0.isTimed })?.start { lastTime = t }
             let time = para.zoomOnly ? (para.zoomStart ?? 0) : lastTime
-            var header = timestamp(time)
-            if let s = para.speaker { header += "   " + s.uppercased() }
-            if para.zoomOnly { header += "   (Zoom only — not in the video)" }
+            let stripe = para.speaker.map { SpeakerPalette.nsColor(speakerOrder.firstIndex(of: $0) ?? 0) }
+            let paragraphStart = out.length
             var hAttrs = headerAttrs
             hAttrs[.octoHeader] = true
             hAttrs[.octoParagraph] = pid.raw
-            out.append(NSAttributedString(string: header + "\n", attributes: hAttrs))
+            out.append(NSAttributedString(string: timestamp(time) + "   ", attributes: hAttrs))
+            var nameAttrs = hAttrs
+            nameAttrs[.octoSpeakerName] = true
+            if let speaker = para.speaker, let stripe {
+                nameAttrs[.foregroundColor] = stripe
+                out.append(NSAttributedString(string: speaker.uppercased(), attributes: nameAttrs))
+            } else if !para.zoomOnly {
+                nameAttrs[.foregroundColor] = NSColor.tertiaryLabelColor
+                out.append(NSAttributedString(string: "+ SPEAKER", attributes: nameAttrs))
+            }
+            out.append(NSAttributedString(string: (para.zoomOnly ? "   (Zoom only — not in the video)" : "") + "\n",
+                                          attributes: hAttrs))
 
             for k in i..<j {
                 if let (n, clip) = opens[k] {
@@ -900,6 +989,9 @@ enum TranscriptText {
                     }
                 }
                 out.append(NSAttributedString(string: sep, attributes: sepAttrs))
+            }
+            if let stripe {
+                out.addAttribute(.octoStripe, value: stripe, range: NSRange(location: paragraphStart, length: out.length - paragraphStart))
             }
             i = j
         }

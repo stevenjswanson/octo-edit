@@ -37,6 +37,9 @@ struct DocumentView: View {
             ClipShelf(model: model)
                 .frame(minHeight: 120, idealHeight: 128, maxHeight: 160)
         }
+        .sheet(isPresented: Binding(get: { model.identifyRequest }, set: { model.identifyRequest = $0 })) {
+            IdentifySpeakersSheet(model: model)
+        }
         .sheet(isPresented: Binding(get: { model.showingExport }, set: { model.showingExport = $0 })) {
             ExportSheet(export: model.exporter, model: model, close: { model.showingExport = false })
         }

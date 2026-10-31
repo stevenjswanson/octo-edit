@@ -75,6 +75,11 @@ final class DocumentModel {
     var suggesting = Set<ClipID>()
     @ObservationIgnored var warnedAboutNamer = false
     var showingExport = false
+    /// Identify Speakers… progress (0…1) while it runs.
+    var identifyingSpeakers: Double?
+    var showingSpeakers = false
+    /// Identify Speakers… sheet: the roster to name voices from.
+    var identifyRequest = false
     @ObservationIgnored let exporter = ExportModel()
 
     /// The word at the transcript caret (for ⌘B with no selection).
@@ -293,21 +298,6 @@ final class DocumentModel {
     }
 
     func toggleTextEditing() { textEditing ? endTextEditing() : beginTextEditing() }
-
-    /// Renames one paragraph's speaker, or every paragraph with the same speaker.
-    func setSpeaker(of pid: ParagraphID, to name: String, everywhere: Bool) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        let new = trimmed.isEmpty ? nil : trimmed
-        let old = project.paragraph(pid)?.speaker
-        let targets = everywhere ? project.paragraphs.filter { $0.speaker == old }.map(\.id) : [pid]
-        perform(everywhere ? "Rename Speaker" : "Set Speaker") { p in
-            if everywhere, let old, let new {
-                p.renameSpeaker(old, to: new)
-            } else {
-                for id in targets { p.setSpeaker(paragraph: id, new) }
-            }
-        }
-    }
 
     // MARK: Clip shelf
 

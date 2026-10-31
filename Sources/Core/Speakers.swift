@@ -139,3 +139,22 @@ extension Project {
         return t.isEmpty ? nil : t
     }
 }
+
+/// Roster text as typed on the command line or in the app.
+public enum Roster {
+    /// "Mia Minnes, Kathy, Ori" → names, trimmed, blanks and repeats dropped.
+    public static func parse(_ s: String) -> [String] {
+        var out: [String] = []
+        for part in s.split(separator: ",") {
+            let n = part.trimmingCharacters(in: .whitespaces)
+            if !n.isEmpty, !out.contains(n) { out.append(n) }
+        }
+        return out
+    }
+
+    /// `Speaker 3`: a name made up for a voice nobody recognised, not a real one.
+    public static func isPlaceholder(_ name: String) -> Bool {
+        let n = name.dropFirst("Speaker ".count)
+        return name.hasPrefix("Speaker ") && !n.isEmpty && n.allSatisfy(\.isNumber)
+    }
+}

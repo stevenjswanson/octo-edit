@@ -19,6 +19,19 @@ struct TranscriptToolbar: View {
             .disabled(model.loadErrors)
             .help("Cut: mark clips and omissions. Edit Text: fix words (⇧⌘T); clips and timing are kept.")
 
+            Button {
+                model.showingSpeakers.toggle()
+            } label: {
+                Label("Speakers", systemImage: "person.2")
+            }
+            .help("The speaker roster: rename, merge, give words to a speaker (⌥⌘S)")
+            .popover(isPresented: $model.showingSpeakers, arrowEdge: .bottom) { SpeakersPanel(model: model) }
+
+            if let f = model.identifyingSpeakers {
+                ProgressView(value: f).frame(width: 80)
+                Text("Finding voices…").font(.caption).foregroundStyle(.secondary)
+            }
+
             Toggle("Follow playhead", isOn: $model.followPlayhead)
                 .toggleStyle(.checkbox)
                 .help("Keep the playing word in view while a video plays")

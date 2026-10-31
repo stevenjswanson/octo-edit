@@ -38,6 +38,8 @@ targets:
         product: Render
       - package: OctoEditKit
         product: Naming
+      - package: OctoEditKit
+        product: Diarize
     info:
       path: Generated/Info.plist
       properties:

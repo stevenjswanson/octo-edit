@@ -288,6 +288,21 @@ final class ProjectDocument: NSDocument {
     }
     @objc func nameUnnamedClips(_ sender: Any?) { MainActor.assumeIsolated { model.nameUnnamedClips() } }
 
+    @objc func showSpeakers(_ sender: Any?) { MainActor.assumeIsolated { model.showingSpeakers = true } }
+    @objc func identifySpeakers(_ sender: Any?) { MainActor.assumeIsolated { model.identifyRequest = true } }
+    @objc func assignSpeaker(_ sender: Any?) {
+        guard let n = (sender as? NSMenuItem)?.tag else { return }
+        MainActor.assumeIsolated { model.assignSelection(toSpeakerAt: n) }
+    }
+    @objc func assignNewSpeaker(_ sender: Any?) {
+        let window = windowControllers.first?.window
+        MainActor.assumeIsolated {
+            let m = model
+            guard m.selection != nil else { return m.assignSelection(to: nil) }
+            m.askForSpeakerName(title: "New speaker for the selected words", button: "Assign", in: window) { m.assignSelection(to: $0) }
+        }
+    }
+
     @objc func findInTranscript(_ sender: Any?) { MainActor.assumeIsolated { model.focusSearch() } }
     @objc func findNext(_ sender: Any?) { MainActor.assumeIsolated { model.findNext() } }
     @objc func findPrevious(_ sender: Any?) { MainActor.assumeIsolated { model.findPrevious() } }
@@ -335,6 +350,16 @@ final class ProjectDocument: NSDocument {
             return true
         }
         let m = model
+        if item.action == #selector(assignSpeaker(_:)), let menuItem = item as? NSMenuItem {
+            return MainActor.assumeIsolated {
+                let order = m.speakerOrder
+                menuItem.isHidden = !order.indices.contains(menuItem.tag)
+                guard !menuItem.isHidden else { return false }
+                menuItem.title = order[menuItem.tag]
+                menuItem.image = WordTextView.swatch(SpeakerPalette.nsColor(menuItem.tag))
+                return transcriptFocused && m.canEdit && m.selection != nil
+            }
+        }
         let enabled: Bool? = MainActor.assumeIsolated {
             switch item.action {
             case #selector(makeClip(_:)): m.canEdit && m.canMakeClip
@@ -350,6 +375,9 @@ final class ProjectDocument: NSDocument {
             case #selector(exportClips(_:)): !m.project.clips.isEmpty && !m.loadErrors && !m.sourceMissing
             case #selector(suggestNames(_:)): m.canEdit && m.selectedClip != nil
             case #selector(nameUnnamedClips(_:)): m.canEdit && m.project.clips.contains { $0.name == nil }
+            case #selector(showSpeakers(_:)): true
+            case #selector(identifySpeakers(_:)): m.canEdit && m.identifyingSpeakers == nil && !m.sourceMissing
+            case #selector(assignNewSpeaker(_:)): m.canEdit && m.selection != nil
             default: nil
             }
         }
