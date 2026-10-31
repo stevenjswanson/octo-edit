@@ -168,7 +168,6 @@ private struct SpeakerRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(index < 9 ? "⌥\(index + 1)" : "").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 22)
             Circle().fill(SpeakerPalette.color(index)).frame(width: 10, height: 10)
             Group {
                 if let portrait { Image(nsImage: portrait).resizable() } else { Image(systemName: "person.crop.square").resizable().foregroundStyle(.tertiary) }
