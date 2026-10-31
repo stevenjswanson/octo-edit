@@ -19,10 +19,13 @@ let package = Package(
         .library(name: "Waveform", targets: ["Waveform"]),
         .library(name: "Render", targets: ["Render"]),
         .library(name: "Naming", targets: ["Naming"]),
+        .library(name: "Diarize", targets: ["Diarize"]),
     ],
     dependencies: [
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+        // Speaker diarization only: no TTS or text-normalization engines.
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.18.0", traits: ["Diarizer"]),
     ],
     targets: [
         // Core: pure data model + operations. Foundation only.
@@ -42,6 +45,9 @@ let package = Package(
         .target(name: "Ingest", dependencies: ["Core", "Align"]),
         .target(name: "Transcribe", dependencies: ["Core"], swiftSettings: swift5),
         .target(name: "Waveform", dependencies: ["Core"], swiftSettings: swift5),
+        // Who speaks when, from the voices alone. The only code that imports FluidAudio.
+        .target(name: "Diarize", dependencies: ["Core", .product(name: "FluidAudio", package: "FluidAudio")],
+                swiftSettings: swift5),
 
         // Render: composition + export.
         .target(name: "Render", dependencies: ["Core"], swiftSettings: swift5),
@@ -50,7 +56,7 @@ let package = Package(
         .executableTarget(
             name: "octoedit",
             dependencies: [
-                "Core", "Align", "Ingest", "Load", "Save", "Render", "Naming", "Transcribe", "Waveform",
+                "Core", "Align", "Ingest", "Load", "Save", "Render", "Naming", "Transcribe", "Waveform", "Diarize",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             swiftSettings: swift5

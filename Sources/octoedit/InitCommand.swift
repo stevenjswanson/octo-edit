@@ -5,6 +5,8 @@ import Ingest
 import Save
 import Transcribe
 import Waveform
+import Diarize
+import Naming
 
 struct InitCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -16,8 +18,14 @@ struct InitCommand: AsyncParsableCommand {
         Zoom transcript. Writes an un-annotated transcript.md into the package.
         Takes about 1½ minutes per hour of video.
 
+        With --speakers, also finds who speaks when from the voices (about half a
+        minute more per hour): every voice change starts a paragraph, and voices are
+        named from the roster, or Speaker 1, 2, … when no name fits. Zoom's names win
+        when Zoom credits more than one person. Run `octoedit speakers` later to redo it.
+
         EXAMPLE
           octoedit init --video seminar-4k.mp4 --zoom GMT20260928_Recording.transcript.vtt seminar.octoedit
+          octoedit init --video panel.mp4 --speakers "Mia Minnes, Kathy, Ori, Leena, Steve Swanson" panel.octoedit
         """
     )
 
@@ -26,6 +34,9 @@ struct InitCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: "Zoom transcript (.vtt) of the same meeting.")
     var zoom: String?
+
+    @Option(help: "The roster, comma-separated; also turns on finding who speaks when.")
+    var speakers: String?
 
     @Option(help: "Default lead-in before a clip's first word.")
     var pre: Milliseconds?
@@ -65,15 +76,22 @@ struct InitCommand: AsyncParsableCommand {
         settings.codec = codec
 
         let started = Date()
-        let ingest = Ingest(transcriber: AppleSpeechTranscriber(), analyzer: AssetEnvelopeAnalyzer())
-        let result = try await ingest.run(video: videoURL, zoom: zoomURL, settings: settings) { stage, fraction in
+        var ingest = Ingest(transcriber: AppleSpeechTranscriber(), analyzer: AssetEnvelopeAnalyzer())
+        let roster = speakers.map(Roster.parse) ?? []
+        if speakers != nil {
+            let (namer, reason) = SpeakerNamers.preferred()
+            if let reason { Console.note("Naming voices from textual cues only, because \(reason).") }
+            ingest.diarizer = FluidAudioDiarizer()
+            ingest.speakerNamer = namer
+        }
+        let result = try await ingest.run(video: videoURL, zoom: zoomURL, settings: settings, speakers: roster) { stage, fraction in
             Console.progress(stage.rawValue, fraction)
         }
         // Ingest → Save, and nothing else.
         try PackageWriter.save(result.project, to: pkg,
                                options: .init(words: result.words, envelope: result.envelope, zoomTranscript: zoomURL))
         let p = result.project
-        let speakers = Set(p.paragraphs.compactMap(\.speaker)).sorted()
+        let speakers = p.speakersInOrder()
         Console.note(String(format: "Transcribed %d words in %d paragraphs in %.0f s.", p.words.count, p.paragraphs.count,
                             Date().timeIntervalSince(started)))
         if !speakers.isEmpty { Console.note("Speakers: " + speakers.joined(separator: ", ")) }

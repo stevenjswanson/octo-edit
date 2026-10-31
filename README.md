@@ -17,7 +17,8 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 
 | Command | What it does |
 |---|---|
-| `init --video V [--zoom Z] [--pre 120ms --post 180ms --crossfade 20ms] [--codec hevc\|h264] PKG` | Transcribes V on this Mac (English, first audio track), tightens word edges against the audio, takes speakers and text from the Zoom `.vtt`, and writes an un-annotated `transcript.md`. |
+| `init --video V [--zoom Z] [--speakers "A, B"] [--pre 120ms --post 180ms --crossfade 20ms] [--codec hevc\|h264] PKG` | Transcribes V on this Mac (English, first audio track), tightens word edges against the audio, takes speakers and text from the Zoom `.vtt`, and writes an un-annotated `transcript.md`. `--speakers` sets the roster and also finds who speaks when (as `speakers` below). |
+| `speakers PKG [--speakers "A, B"]` | Finds who speaks when from the voices: every voice change starts a paragraph, and voices are named from the roster (or Speaker 1, 2, …). Resets every speaker name; markers stay on their words. Lists turns under a second to check. |
 | `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--dest DIR]` | Exports each clip as `SLUG.mp4` (input resolution and frame rate, hardware-encoded) plus `SLUG.vtt` captions and a `notes.md`. `--check` only validates; `--preview` makes fast 720p `SLUG.preview.mp4` files in `exports/preview/`. |
 | `name PKG [--clip SLUG]… [--apply [--all]]` | Suggests titles with Apple's on-device model into the front matter. `--apply` names unnamed clips; `--all` renames every clip. |
 
@@ -74,4 +75,5 @@ swift test                      # unit tests; integration tests run when fixture
 
 Components (one SwiftPM target each): `Core` (model, no I/O), `Ingest`, `Load`, `Save`,
 `Render`, plus shared `Align`, `MarkupGrammar`, `Naming`, and the framework-bound
-`Transcribe` and `Waveform`. `ArchitectureTests` enforces which may import which.
+`Transcribe`, `Waveform` and `Diarize` (FluidAudio, the only third-party audio code;
+its 21 MB of models download once on first use). `ArchitectureTests` enforces which may import which.

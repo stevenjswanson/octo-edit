@@ -551,3 +551,29 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(p.speakers == ["A", "B"])
     }
 }
+
+@Suite struct VoiceTests {
+    @Test func wordsTakeTheVoiceTheyOverlapMost() {
+        let p = sampleProject(count: 6)   // word i spans i…i+0.8
+        let turns = [VoiceTurn(start: 0, end: 2.5, voice: "S1"), VoiceTurn(start: 2.5, end: 3.9, voice: "S2"),
+                     VoiceTurn(start: 5.5, end: 9, voice: "S1")]
+        // Word 4 (4.0–4.8) is in no turn but within reach of S2 and S1; it takes S2, the nearer.
+        #expect(p.voices(from: turns) == ["S1", "S1", "S1", "S2", "S2", "S1"])
+        #expect(p.voices(from: []) == Array(repeating: nil, count: 6))
+    }
+
+    @Test func everyVoiceChangeStartsAParagraphAndNamesAreSet() throws {
+        var p = sampleProject()
+        let c = try p.makeClip(words: 2...7)
+        try p.omit(words: 4...4, in: c)
+        let before = p.clips
+        let voices: [String?] = ["S1", "S1", "S2", nil, "S2", "S1", "S1", "S1", "S2", "S2"]
+        p.applyVoices(voices, names: ["S1": "Kathy", "S2": "Ori"])
+        let speakers = p.words.map { p.paragraph($0.paragraph)!.speaker! }
+        #expect(speakers == ["Kathy", "Kathy", "Ori", "Ori", "Ori", "Kathy", "Kathy", "Kathy", "Ori", "Ori"])
+        #expect(p.paragraphs.count == 4)
+        #expect(p.paragraphs.first?.id == ParagraphID(1))   // the first run keeps the paragraph
+        #expect(p.speakers == ["A", "Kathy", "Ori"] || p.speakers == ["Kathy", "Ori"])
+        #expect(p.clips == before)                          // markers stay on their words
+    }
+}

@@ -216,3 +216,55 @@ func edgeError(_ words: [(start: Double, end: Double)], _ lines: [TruthLine]) ->
         #expect(lag < 2, "took \(lag) s to stop")
     }
 }
+
+@Suite struct SpeakerIDTests {
+    struct FixedNamer: SpeakerNamer {
+        var label: String { "fixed" }
+        var result: [String: String]
+        func names(for voices: [VoiceSample], roster: [String]) async -> [String: String] { result }
+    }
+
+    /// Ten words, one a second, all in one paragraph credited to the room account.
+    func project() -> Project {
+        let p = ParagraphID(1)
+        let words = (0..<10).map { Word(id: WordID($0 + 1), text: "w\($0)", start: Double($0), end: Double($0) + 0.8, paragraph: p) }
+        return Project(source: "v.mp4", paragraphs: [Paragraph(id: p, speaker: "Room")], words: words, speakers: ["Kathy", "Ori"])
+    }
+
+    let turns = [VoiceTurn(start: 0, end: 3.9, voice: "S1"), VoiceTurn(start: 4, end: 4.9, voice: "S2"),
+                 VoiceTurn(start: 5, end: 9.9, voice: "S1"), VoiceTurn(start: 30, end: 31, voice: "S3")]
+
+    @Test func namesUnmatchedVoicesSpeakerNAndReportsShortTurns() async {
+        var p = project()
+        let r = await SpeakerID.identify(&p, turns: turns, namer: FixedNamer(result: ["S1": "Kathy", "S2": "Mallory"]))
+        // Mallory isn't on the roster, so S2 becomes Speaker 1; S3 has no words.
+        #expect(p.paragraphs.map(\.speaker) == ["Kathy", "Speaker 1", "Kathy"])
+        #expect(r.matched == ["S1"])
+        #expect(r.shortTurns.map(\.text) == ["w4"])
+        #expect(r.changedWords == 10)
+        #expect(p.speakers.prefix(2) == ["Kathy", "Speaker 1"])
+    }
+
+    @Test func rerunKeepsMarkersOnTheirWords() async throws {
+        var p = project()
+        let c = try p.makeClip(words: 3...8, name: "A clip")
+        try p.omit(words: 5...6, in: c)
+        let clips = p.clips, omissions = p.omissions
+        _ = await SpeakerID.identify(&p, turns: turns, namer: FixedNamer(result: ["S1": "Kathy", "S2": "Ori"]))
+        let again = turns.map { VoiceTurn(start: $0.start, end: $0.end, voice: $0.voice == "S1" ? "S2" : "S1") }
+        _ = await SpeakerID.identify(&p, turns: again, namer: FixedNamer(result: ["S1": "Ori", "S2": "Kathy"]))
+        #expect(p.clips == clips)
+        #expect(p.omissions == omissions)
+        #expect(p.validate().isEmpty)
+    }
+
+    @Test func zoomNamesWinWhenZoomCreditsSeveralPeople() async {
+        var p = project()
+        p.zoom = ZoomInfo(file: "z.vtt", offset: 10)
+        let cues = [Cue(index: 1, start: 10, end: 14, speaker: "Kathy Lee", text: ""),
+                    Cue(index: 2, start: 14, end: 15, speaker: "Ori Z", text: ""),
+                    Cue(index: 3, start: 15, end: 20, speaker: "Kathy Lee", text: "")]
+        _ = await SpeakerID.identify(&p, turns: turns, cues: cues, namer: FixedNamer(result: [:]))
+        #expect(p.paragraphs.map(\.speaker) == ["Kathy Lee", "Ori Z", "Kathy Lee"])
+    }
+}

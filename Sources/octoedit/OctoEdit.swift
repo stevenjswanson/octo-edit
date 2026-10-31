@@ -37,7 +37,7 @@ struct OctoEdit: AsyncParsableCommand {
           64 bad command-line arguments
           130 cancelled (Ctrl-C); finished clips stay, nothing partial is left
         """,
-        subcommands: [InitCommand.self, RenderCommand.self, SplitCommand.self, NameCommand.self, GuideCommand.self]
+        subcommands: [InitCommand.self, RenderCommand.self, SplitCommand.self, NameCommand.self, SpeakersCommand.self, GuideCommand.self]
     )
 }
 

@@ -63,3 +63,26 @@ func project() throws -> Project {
         #expect(!s.isEmpty && s.allSatisfy { !$0.isEmpty && $0.count < 80 })
     }
 }
+
+@Suite struct CueSpeakerNamerTests {
+    func sample(_ voice: String, _ turns: [VoiceSample.Turn]) -> VoiceSample {
+        VoiceSample(voice: voice, seconds: 60, turns: turns)
+    }
+
+    @Test func introductionsHandoffsAndThanks() async {
+        let voices = [
+            sample("S1", [.init(start: 0, text: "Welcome. Kathy, do you want to start?", after: "Yeah, hello")]),
+            sample("S2", [.init(start: 5, text: "Yeah, hello, my name's Kathy, I'm a third-year student",
+                                before: "Kathy, do you want to start?", after: "Thanks, Kathy. Ori?")]),
+            sample("S3", [.init(start: 9, text: "Hi everyone. I'm Ori and I interned at Viasat", before: "Thanks, Kathy. Ori?")]),
+            sample("S4", [.init(start: 20, text: "I agree with what Kathy said")]),
+        ]
+        let names = await CueSpeakerNamer().names(for: voices, roster: ["Mia Minnes", "Kathy", "Ori"])
+        #expect(names == ["S2": "Kathy", "S3": "Ori"])
+    }
+
+    @Test func eachNameUsedOnce() {
+        let scores = ["S1": ["Kathy": 5.0], "S2": ["Kathy": 3.0, "Ori": 2.0]]
+        #expect(CueSpeakerNamer.assign(scores, threshold: 2) == ["S1": "Kathy", "S2": "Ori"])
+    }
+}

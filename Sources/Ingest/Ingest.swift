@@ -17,11 +17,16 @@ public struct Ingest: Sendable {
         case analyzingAudio = "Analyzing audio"
         case transcribing = "Transcribing"
         case aligning = "Aligning with Zoom transcript"
+        case findingVoices = "Finding voices"
     }
 
     public var transcriber: any Transcriber
     public var analyzer: any EnvelopeAnalyzer
     public var refiner = SilenceRefiner()
+    /// With both set, every voice change starts a paragraph and voices are named
+    /// (see `SpeakerID`). Without them, paragraphs follow Zoom's speakers or pauses.
+    public var diarizer: (any Diarizer)?
+    public var speakerNamer: (any SpeakerNamer)?
 
     /// Paragraph breaks when there is no Zoom transcript.
     public var paragraphPause: Seconds = 1.5
@@ -36,7 +41,8 @@ public struct Ingest: Sendable {
     }
 
     /// Cancelling the calling task stops the run with `CancellationError`.
-    public func run(video: URL, zoom: URL?, settings: ProjectSettings,
+    /// `speakers` is the roster: names the speaker pass may give voices.
+    public func run(video: URL, zoom: URL?, settings: ProjectSettings, speakers: [String] = [],
                     progress: @escaping @Sendable (Stage, Double) -> Void = { _, _ in }) async throws -> Result {
         progress(.analyzingAudio, 0)
         let envelope = try await analyzer.envelope(of: video)
@@ -46,16 +52,24 @@ public struct Ingest: Sendable {
         try Task.checkCancellation()
         let refined = refiner.refine(raw, envelope: envelope)
 
-        var project = Project(source: video.standardizedFileURL.path, settings: settings)
+        var project = Project(source: video.standardizedFileURL.path, settings: settings, speakers: speakers)
+        var cues: [Cue] = []
         if let zoom {
             progress(.aligning, 0)
-            let cues = ZoomVTT.parse(try String(contentsOf: zoom, encoding: .utf8))
+            cues = ZoomVTT.parse(try String(contentsOf: zoom, encoding: .utf8))
             let merged = ZoomMerge.merge(asr: refined, cues: cues)
             project.zoom = ZoomInfo(file: zoom.lastPathComponent, offset: merged.offset)
             build(&project, merged: merged, cues: cues)
             progress(.aligning, 1)
         } else {
             build(&project, words: refined)
+        }
+        if let diarizer, let speakerNamer {
+            let turns = try await diarizer.diarize(audio: video) { progress(.findingVoices, $0) }
+            try Task.checkCancellation()
+            _ = await SpeakerID.identify(&project, turns: turns, cues: cues, namer: speakerNamer)
+        } else {
+            project.normalizeSpeakers()
         }
         let timed = project.words.compactMap { w -> TimedWord? in
             guard let s = w.start, let e = w.end else { return nil }

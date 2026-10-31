@@ -6,7 +6,7 @@ import Foundation
 /// to which targets.
 @Suite struct DependencyRulesTests {
     static let projectModules: Set<String> = ["Core", "Align", "MarkupGrammar", "Naming", "Load", "Save",
-                                               "Ingest", "Transcribe", "Waveform", "Render"]
+                                               "Ingest", "Transcribe", "Waveform", "Render", "Diarize"]
 
     static let allowed: [String: Set<String>] = [
         "Core": [],
@@ -18,6 +18,7 @@ import Foundation
         "Ingest": ["Core", "Align"],
         "Transcribe": ["Core"],
         "Waveform": ["Core"],
+        "Diarize": ["Core"],
         "Render": ["Core"],
     ]
 
@@ -25,9 +26,10 @@ import Foundation
     static let confined: [String: Set<String>] = [
         "Speech": ["Transcribe"],
         "FoundationModels": ["Naming"],
-        "AVFoundation": ["Transcribe", "Waveform", "Render"],
-        "AVFAudio": ["Transcribe", "Waveform", "Render"],
-        "CoreMedia": ["Transcribe", "Waveform", "Render"],
+        "FluidAudio": ["Diarize"],
+        "AVFoundation": ["Transcribe", "Waveform", "Diarize", "Render"],
+        "AVFAudio": ["Transcribe", "Waveform", "Diarize", "Render"],
+        "CoreMedia": ["Transcribe", "Waveform", "Diarize", "Render"],
         "Yams": ["Load"],
         "AppKit": [],
         "SwiftUI": [],
