@@ -587,9 +587,7 @@ final class WordTextView: NSTextView {
             return
         }
         guard selectedRange().length == 0, let w = word(at: point), let coordinator else { return }
-        if coordinator.model.clicked(word: w), coordinator.wordRanges.indices.contains(w) {
-            setSelectedRange(coordinator.wordRanges[w])
-        }
+        coordinator.model.clicked(word: w)
     }
 
     /// Drag-to-select that also lets scroll events through (AppKit's own loop swallows

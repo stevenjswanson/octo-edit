@@ -517,26 +517,21 @@ final class DocumentModel {
 
     /// A click on a word (no drag): seek the source, select the clip it is in, and
     /// line the preview up with it. Outside every clip the video pane switches to the
-    /// recording at the word. A click during playback only stops it;
-    /// returns true then (the view selects the word).
-    @discardableResult
-    func clicked(word i: Int) -> Bool {
-        let outside = project.clip(containingWordAt: i) == nil
-        activePane = outside ? .source : .preview
+    /// recording at the word. Playing or paused stays as it was: during playback, the
+    /// video carries on from the clicked word.
+    func clicked(word i: Int) {
         let wasPlaying = player.rate != 0 || preview.player.rate != 0
-        if wasPlaying {
-            player.pause()
-            preview.cancelExcerpt()
-            preview.player.pause()
+        guard let c = project.clip(containingWordAt: i) else {
+            showSource(atWord: i)
+            if wasPlaying { player.play() }
+            return
         }
-        defer { if wasPlaying { selection = i...i } }
-        if outside && !wasPlaying { showSource(atWord: i); return false }
+        activePane = .preview
+        player.pause()
         seekSource(toWord: i)
-        if let c = project.clip(containingWordAt: i) {
-            if c.id != selectedClip { select(clip: c.id) }
-            if let t = project.words[i].start { preview.seek(toSourceTime: t) }
-        }
-        return wasPlaying
+        if c.id != selectedClip { select(clip: c.id) }
+        guard let t = project.words[i].start else { return }
+        if wasPlaying { preview.playWhenReady(.from(t)) } else { preview.seek(toSourceTime: t) }
     }
 
     /// A dragged selection that starts outside every clip shows the recording there.

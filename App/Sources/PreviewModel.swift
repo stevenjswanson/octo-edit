@@ -52,6 +52,7 @@ final class PreviewModel {
         case around(from: Double, to: Double)         // a changed source span, ± the length
         case loop(around: Double, half: Double)       // repeat ±half around a source-time cut
         case once(around: Double, half: Double)       // play ±half around a source-time cut, once
+        case from(Double)                             // play on from a source time (a click during playback)
     }
 
     /// The user played or scrubbed the preview: its position as a source time.
@@ -165,7 +166,7 @@ final class PreviewModel {
                 pendingSeek = nil
                 let cue = excerptGeneration == cueGeneration ? (readyCue ?? cue) : nil
                 readyCue = nil
-                if let cue, cue.isInspectorCue {
+                if let cue, cue.playsWithoutAutoPreview {
                     await playExcerpt(cue)
                 } else if let cue, PlaybackSettings.shared.autoPreview {
                     await playExcerpt(cue)
@@ -250,6 +251,8 @@ final class PreviewModel {
             (from, to) = (0, length)
         case .end:
             (from, to) = (duration - length, duration)
+        case .from(let t):
+            (from, to) = (clipTime(atOrAfterSource: t) ?? duration, duration)
         case .around(let a, let b):
             let ca = clipTime(atOrAfterSource: a) ?? duration
             let cb = clipTime(atOrAfterSource: b) ?? duration
@@ -335,9 +338,10 @@ final class PreviewModel {
 }
 
 extension PreviewModel.Cue {
-    var isInspectorCue: Bool {
+    /// Asked for directly (the inspector, a click), not an auto preview.
+    var playsWithoutAutoPreview: Bool {
         switch self {
-        case .loop, .once: true
+        case .loop, .once, .from: true
         default: false
         }
     }
