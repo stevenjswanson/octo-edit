@@ -318,6 +318,12 @@ final class ProjectDocument: NSDocument {
     @objc func toggleAutoPreview(_ sender: Any?) {
         MainActor.assumeIsolated { PlaybackSettings.shared.autoPreview.toggle() }
     }
+    @objc func togglePortraitPreview(_ sender: Any?) {
+        MainActor.assumeIsolated {
+            PlaybackSettings.shared.portraitPreview.toggle()
+            model.refreshPreviewNow()
+        }
+    }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
         let responder = windowControllers.first?.window?.firstResponder
@@ -339,6 +345,10 @@ final class ProjectDocument: NSDocument {
         }
         if item.action == #selector(toggleAutoPreview(_:)) {
             (item as? NSMenuItem)?.state = MainActor.assumeIsolated { PlaybackSettings.shared.autoPreview } ? .on : .off
+            return true
+        }
+        if item.action == #selector(togglePortraitPreview(_:)) {
+            (item as? NSMenuItem)?.state = MainActor.assumeIsolated { PlaybackSettings.shared.portraitPreview } ? .on : .off
             return true
         }
         let m = model

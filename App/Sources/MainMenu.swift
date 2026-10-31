@@ -98,12 +98,13 @@ enum MainMenu {
         m.addItem(item("Speakers…", #selector(ProjectDocument.showSpeakers(_:)), "s", [.command, .option]))
         m.addItem(item("Identify Speakers…", #selector(ProjectDocument.identifySpeakers(_:))))
         m.addItem(.separator())
-        let source = item("Framing: As Recorded", #selector(ProjectDocument.setFraming(_:)))
+        let source = item("Export Framing: As Recorded", #selector(ProjectDocument.setFraming(_:)))
         source.tag = 0
-        let portrait = item("Framing: 9:16, Following the Speaker", #selector(ProjectDocument.setFraming(_:)))
+        let portrait = item("Export Framing: 9:16, Following the Speaker", #selector(ProjectDocument.setFraming(_:)))
         portrait.tag = 1
         m.addItem(source)
         m.addItem(portrait)
+        m.addItem(item("9:16 Preview", #selector(ProjectDocument.togglePortraitPreview(_:))))
         m.addItem(item("Find Faces", #selector(ProjectDocument.findFaces(_:))))
         return m
     }
@@ -114,6 +115,7 @@ enum MainMenu {
         m.addItem(item("Play/Pause", #selector(ProjectDocument.togglePlayPause(_:)), " ", []))
         m.addItem(.separator())
         m.addItem(item("Auto Preview", #selector(ProjectDocument.toggleAutoPreview(_:)), "p", [.command, .shift]))
+        m.addItem(item("9:16 Preview", #selector(ProjectDocument.togglePortraitPreview(_:))))
         return m
     }
 
