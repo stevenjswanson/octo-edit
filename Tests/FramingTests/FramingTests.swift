@@ -84,15 +84,14 @@ func project(_ turns: [(start: Double, end: Double, speaker: String)]) -> Projec
 @Suite struct ColumnPathTests {
     let aspect = 16.0 / 9.0
 
-    @Test func fullHeightColumnCentredOnTheSpeakerThenPans() {
+    @Test func fullHeightColumnCentredOnTheSpeakerThenCuts() {
         let (faces, p) = panel()
         let labels = FaceLabels(faces: faces, project: p)
         let path = ColumnPath(segments: [(0, 10)], timeline: SpeechTimeline(p), labels: labels, aspect: aspect)
         #expect(abs(path.width - 0.31640625) < 1e-9)   // 1215 of 3840 pixels
         #expect(abs(path.x(at: 2) - 0.2) < 0.01)
-        let mid = path.x(at: 5.3)
-        #expect(mid > 0.25 && mid < 0.65)              // panning
-        #expect(abs(path.x(at: 6) - 0.7) < 0.01)
+        #expect(abs(path.x(at: 4.99) - 0.2) < 0.01)
+        #expect(abs(path.x(at: 5) - 0.7) < 0.01)       // B speaks: an instant cut, no pan
     }
 
     @Test func jumpsWithACutInTheSource() {
@@ -100,8 +99,7 @@ func project(_ turns: [(start: Double, end: Double, speaker: String)]) -> Projec
         let path = ColumnPath(segments: [(8, 13)], timeline: SpeechTimeline(p), labels: FaceLabels(faces: faces, project: p),
                               aspect: aspect)
         #expect(abs(path.x(at: 9) - 0.7) < 0.01)       // B, right
-        #expect(path.keys.contains { $0.t == 10 && $0.jump })
-        #expect(abs(path.x(at: 10.05) - 0.7) < 0.01)   // A now sits on the right: no pan needed
+        #expect(abs(path.x(at: 10.05) - 0.7) < 0.01)   // A now sits on the right: the column stays
         #expect(abs(path.x(at: 12) - 0.7) < 0.01)
     }
 

@@ -101,7 +101,7 @@ public struct CompositionBuilder {
     }
 
     /// A video composition that moves the frame left so the column lands in a
-    /// column-sized render area: constant between keys, eased pans as short ramps.
+    /// column-sized render area: constant between keys, cutting at each key.
     static func crop(_ comp: AVMutableComposition, track: AVMutableCompositionTrack, column: ColumnPath,
                      transform: CGAffineTransform, frame: CGSize, starts: [Seconds], ranges: [ResolvedSegment],
                      fps: Double, outputHeight: Int?) -> AVVideoComposition {
@@ -119,21 +119,8 @@ public struct CompositionBuilder {
             let offset = starts[k] - r.start
             let at = { (t: Seconds) in CMTime(seconds: t + offset, preferredTimescale: ts) }
             layer.setTransform(placed(column.x(at: r.start)), at: at(r.start))
-            let inside = column.keys.filter { $0.t > r.start && $0.t < r.end }
-            for (n, key) in inside.enumerated() {
-                if key.jump {
-                    layer.setTransform(placed(key.x), at: at(key.t))
-                    continue
-                }
-                let end = min(key.t + column.pan, r.end, n + 1 < inside.count ? inside[n + 1].t : .infinity)
-                let steps = 6
-                for s in 0..<steps {
-                    let a = key.t + (end - key.t) * Double(s) / Double(steps)
-                    let b = key.t + (end - key.t) * Double(s + 1) / Double(steps)
-                    layer.setTransformRamp(fromStart: placed(column.x(at: a)), toEnd: placed(column.x(at: b)),
-                                           timeRange: CMTimeRange(start: at(a), end: at(b)))
-                }
-                layer.setTransform(placed(column.x(at: end)), at: at(end))
+            for key in column.keys where key.t > r.start && key.t < r.end {
+                layer.setTransform(placed(key.x), at: at(key.t))
             }
         }
         let instruction = AVMutableVideoCompositionInstruction()
