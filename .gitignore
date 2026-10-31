@@ -8,3 +8,6 @@ Fixtures/generated/
 *.octoedit/exports/
 Fixtures/real/
 App/Generated/
+/seminar.octoedit/
+/test/
+/test copy/
