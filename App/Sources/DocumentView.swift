@@ -72,6 +72,10 @@ struct VideoPane: View {
                     Toggle("Auto preview", isOn: $settings.autoPreview)
                         .toggleStyle(.checkbox).controlSize(.small)
                         .help("After an edit, play the spot that changed (⇧⌘P)")
+                    Toggle("9:16 preview", isOn: $settings.portraitPreview)
+                        .toggleStyle(.checkbox).controlSize(.small)
+                        .help("Play clips cropped to a 9:16 column that follows the speaker, as a 9:16 export looks")
+                        .onChange(of: settings.portraitPreview) { model.refreshPreviewNow() }
                     Spacer()
                 }
                 .padding(.horizontal, 10).padding(.bottom, 8)

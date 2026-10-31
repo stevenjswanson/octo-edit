@@ -111,8 +111,8 @@ final class PreviewModel {
         title = clip.name ?? project.slug(of: clip.id) ?? "Clip"
         let segs = project.resolvedSegments(of: clip, sourceDuration: sourceDuration)
         guard !segs.isEmpty else { clear(message: "This clip has no timed words."); clipID = clip.id; return }
-        // With 9:16 framing the preview plays the cropped column, exactly as exported.
-        let column = project.settings.framing == .portrait
+        // With 9:16 preview on, it plays the cropped column, exactly as a 9:16 export.
+        let column = PlaybackSettings.shared.portraitPreview
             ? ColumnPath(segments: segs.map { ($0.start, $0.end) }, timeline: SpeechTimeline(project),
                          labels: faceLabels(), aspect: aspect)
             : nil
