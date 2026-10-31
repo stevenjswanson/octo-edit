@@ -867,8 +867,49 @@ final class WordTextView: NSTextView {
         let menu = NSMenu()
         for item in MainMenu.clipItems() { menu.addItem(item) }
         menu.addItem(.separator())
+        if let speakers = selectionSpeakerMenu() {
+            let item = NSMenuItem(title: "Speaker", action: nil, keyEquivalent: "")
+            item.submenu = speakers
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
         menu.addItem(NSMenuItem(title: "Copy", action: #selector(copy(_:)), keyEquivalent: ""))
         return menu
+    }
+
+    /// The popup's Speaker submenu: give the selected words to a roster name (in panel
+    /// order, with colours), to no speaker, or to a new speaker. Nil when nothing is selected.
+    private func selectionSpeakerMenu() -> NSMenu? {
+        guard let model = coordinator?.model, model.selection != nil else { return nil }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let enabled = model.canEdit
+        func add(_ title: String, _ action: Selector, _ name: String?, color: NSColor? = nil) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = name
+            item.image = color.map(Self.swatch)
+            item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        for (n, name) in model.speakerOrder.enumerated() {
+            add(name, #selector(giveSelection(_:)), name, color: SpeakerPalette.nsColor(n))
+        }
+        add("No Speaker", #selector(giveSelection(_:)), nil)
+        menu.addItem(.separator())
+        add("New Speaker…", #selector(giveSelectionToNewSpeaker(_:)), nil)
+        return menu
+    }
+
+    @objc private func giveSelection(_ sender: NSMenuItem) {
+        coordinator?.model.assignSelection(to: sender.representedObject as? String)
+    }
+
+    @objc private func giveSelectionToNewSpeaker(_ sender: NSMenuItem) {
+        guard let model = coordinator?.model else { return }
+        model.askForSpeakerName(title: "New speaker for the selected words", button: "Assign", in: window) { name in
+            model.assignSelection(to: name)
+        }
     }
 }
 

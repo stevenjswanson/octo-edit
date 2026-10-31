@@ -92,19 +92,11 @@ enum MainMenu {
         return m
     }
 
-    /// ⌥1–9 give the selected words to speakers 1–9 in panel order; each item's title is
-    /// set to the name when the menu is validated, and items past the roster are hidden.
+    /// Giving selected words to a speaker is on the transcript's right-click menu.
     private static func speakerMenu() -> NSMenu {
         let m = NSMenu(title: "Speaker")
         m.addItem(item("Speakers…", #selector(ProjectDocument.showSpeakers(_:)), "s", [.command, .option]))
         m.addItem(item("Identify Speakers…", #selector(ProjectDocument.identifySpeakers(_:))))
-        m.addItem(.separator())
-        for n in 0..<9 {
-            let i = item("Speaker \(n + 1)", #selector(ProjectDocument.assignSpeaker(_:)), "\(n + 1)", .option)
-            i.tag = n
-            m.addItem(i)
-        }
-        m.addItem(item("Give Selection to New Speaker…", #selector(ProjectDocument.assignNewSpeaker(_:))))
         m.addItem(.separator())
         let source = item("Framing: As Recorded", #selector(ProjectDocument.setFraming(_:)))
         source.tag = 0

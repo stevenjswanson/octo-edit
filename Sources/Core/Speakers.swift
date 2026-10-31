@@ -47,8 +47,10 @@ extension Project {
     }
 
     /// Gives words `r` to `speaker` (nil = no speaker), splitting paragraphs at the
-    /// range's edges so the words around it keep their speakers. Neighbouring
-    /// paragraphs with the same speaker are left separate.
+    /// range's edges so the words around it keep their speakers. The words then join
+    /// any neighbouring paragraph with the same speaker, so giving "you." to the
+    /// speaker of "Thank" makes one paragraph, "Thank you.". (Markers are tied to
+    /// words, not paragraphs, so joining moves none.)
     public mutating func assignSpeaker(words r: ClosedRange<Int>, _ speaker: String?) throws {
         try checkRange(r)
         if r.contains(where: { isZoomOnly(wordAt: $0) }) { throw EditError.zoomOnlyText }
@@ -63,6 +65,14 @@ extension Project {
         let ids = Set(r.map { p.words[$0].paragraph })
         for i in p.paragraphs.indices where ids.contains(p.paragraphs[i].id) { p.paragraphs[i].speaker = name }
         p.addSpeaker(name)
+        // Join runs of same-speaker paragraphs from the one before the range to the one after it.
+        let touched = p.paragraphs.indices.filter { ids.contains(p.paragraphs[$0].id) }
+        if let first = touched.first, let last = touched.last {
+            for k in stride(from: min(last + 1, p.paragraphs.count - 1), to: max(first - 1, 0), by: -1)
+            where !p.paragraphs[k].zoomOnly && !p.paragraphs[k - 1].zoomOnly && p.paragraphs[k].speaker == p.paragraphs[k - 1].speaker {
+                try p.mergeWithPrevious(paragraph: p.paragraphs[k].id)
+            }
+        }
         self = p
     }
 

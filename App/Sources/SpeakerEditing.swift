@@ -19,7 +19,7 @@ enum SpeakerPalette {
 
 /// The roster and who says what: every change is a Core operation with its own undo.
 extension DocumentModel {
-    /// The roster in first-appearance order (the panel order; ⌥1–9 count in it).
+    /// The roster in first-appearance order (the panel order).
     var speakerOrder: [String] { project.speakersInOrder() }
 
     func speakerColor(_ name: String) -> NSColor {
@@ -49,13 +49,6 @@ extension DocumentModel {
             return
         }
         perform("Assign to Speaker") { try $0.assignSpeaker(words: s, name) }
-    }
-
-    /// ⌥1–9: the speaker at that position in the Speakers panel.
-    func assignSelection(toSpeakerAt n: Int) {
-        let order = speakerOrder
-        guard order.indices.contains(n) else { flash("There is no speaker \(n + 1)."); return }
-        assignSelection(to: order[n])
     }
 
     func addSpeaker(_ name: String) {
@@ -153,7 +146,7 @@ struct SpeakersPanel: View {
                 Button("Find Faces") { model.findFaces() }.disabled(model.sourceMissing)
                     .help("Scan the video for faces: speaker portraits here, and 9:16 framing that follows the speaker")
             }
-            Text("⌥1–9 give the selected words to speaker 1–9.").font(.caption).foregroundStyle(.secondary)
+            Text("To give words to a speaker, select them and right-click.").font(.caption).foregroundStyle(.secondary)
         }
         .padding(12)
         .frame(minWidth: 320)

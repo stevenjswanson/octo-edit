@@ -514,11 +514,26 @@ func sampleProject(count: Int = 10) -> Project {
         var p = project()
         try p.assignSpeaker(words: 3...6, "C")
         #expect(speakers(p) == ["A", "A", "A", "C", "C", "C", "C", "B", "B", "B"])
-        #expect(p.paragraphs.count == 4)   // C's words stay in their two paragraphs
+        #expect(p.paragraphs.count == 3)   // C's words join into one paragraph
         var q = project()
         try q.assignSpeaker(words: 5...9, "A")
-        #expect(q.paragraphs.count == 2)   // a whole paragraph: no split, and no auto-merge
+        #expect(q.paragraphs.count == 1)   // a whole paragraph joins the A paragraph before it
         #expect(speakers(q).allSatisfy { $0 == "A" })
+    }
+
+    @Test func assignJoinsTheNeighbourWithTheSameSpeaker() throws {
+        // "Thank" ends A's paragraph and "you." starts B's: give "you." to A.
+        var p = project()
+        let clips = p.clips
+        try p.assignSpeaker(words: 5...5, "A")
+        #expect(speakers(p) == ["A", "A", "A", "A", "A", "A", "B", "B", "B", "B"])
+        #expect(p.paragraphs.count == 2)
+        #expect(p.words[4].paragraph == p.words[5].paragraph)
+        #expect(p.clips == clips)
+        // And back at the end of a paragraph: the B words before join B after.
+        try p.assignSpeaker(words: 5...5, "B")
+        #expect(p.paragraphs.count == 2)
+        #expect(p.words[5].paragraph == p.words[6].paragraph)
     }
 
     @Test func assignRefusesZoomOnlyText() {
