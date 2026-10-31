@@ -112,6 +112,15 @@ func project(_ turns: [(start: Double, end: Double, speaker: String)]) -> Projec
         #expect(abs(path.x(at: 7) - 0.7) < 0.01)
     }
 
+    @Test func aStartNudgedIntoThePreviousSpeakerOpensOnTheClipsSpeaker() {
+        // B's clip starts at 5; its start is moved 0.3 s back into A's last word.
+        let (faces, p) = panel()
+        let labels = FaceLabels(faces: faces, project: p)
+        let path = ColumnPath(segments: [(4.7, 10)], timeline: SpeechTimeline(p), labels: labels, aspect: aspect)
+        #expect(abs(path.x(at: 4.7) - 0.7) < 0.01)     // B from the first frame
+        #expect(path.keys.count == 1)
+    }
+
     @Test func clampedInsideTheFrameAndCentredWithoutFaces() {
         let frames = (0..<50).map { k in
             FaceFrame(t: Double(k) / 10, change: 1, faces: [FaceBox(x: 0.0, y: 0.3, w: 0.06, h: 0.1,

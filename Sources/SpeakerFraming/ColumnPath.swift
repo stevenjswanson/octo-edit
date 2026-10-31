@@ -7,7 +7,8 @@ import Core
 /// - it is centred on the face of the person speaking, at that face's usual place in
 ///   the shot (steadier than following every head movement);
 /// - it switches to a new speaker only when their turn lasts at least `hold`, so a
-///   one-word interjection doesn't swing the picture;
+///   one-word interjection doesn't swing the picture; for the same reason a clip opens
+///   on its first speaker with such a turn, not on whoever's last word it starts in;
 /// - every move is an instant cut, never a pan: on a speaker change, and with each
 ///   cut in the source;
 /// - when the speaker's face isn't in the shot it stays where it was in that shot,
@@ -33,9 +34,13 @@ public struct ColumnPath: Sendable, Equatable {
         func clamp(_ x: Double) -> Double { min(max(x, width / 2), 1 - width / 2) }
         var keys: [Key] = []
         for seg in segments where seg.end > seg.start {
-            var framed = timeline.lastSpeaker(atOrBefore: seg.start)
             let turns = timeline.turns(from: seg.start, to: seg.end)
-            if framed == nil { framed = turns.first?.speaker }
+            // Start on the first speaker who talks for at least `hold` in the segment, so
+            // a start nudged back into the previous speaker's last word or a pause
+            // doesn't open on them for a few frames.
+            let opening = turns.first { $0.end - $0.start >= hold }?.speaker
+                ?? timeline.lastSpeaker(atOrBefore: seg.start) ?? turns.first?.speaker
+            var framed = opening
             // Times where the framed speaker changes.
             var changes: [(t: Seconds, speaker: String)] = []
             for turn in turns where turn.speaker != framed && turn.end - turn.start >= hold {
@@ -44,7 +49,7 @@ public struct ColumnPath: Sendable, Equatable {
             }
             // Shot starts inside the segment.
             let cuts = (labels?.shotStarts ?? []).filter { $0 > seg.start && $0 < seg.end }
-            var current = timeline.lastSpeaker(atOrBefore: seg.start) ?? turns.first?.speaker
+            var current = opening
             // `cut`: a clip start or a cut in the source, where the old position no longer applies.
             var events: [(t: Seconds, speaker: String?, cut: Bool)] = [(seg.start, current, true)]
             var i = 0, j = 0
