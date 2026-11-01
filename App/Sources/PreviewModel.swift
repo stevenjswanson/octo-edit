@@ -77,6 +77,7 @@ final class PreviewModel {
             let playing = p.rate != 0
             DispatchQueue.main.async {
                 guard let self else { return }
+                playbackLog.debug("preview rate \(p.rate) status \(p.timeControlStatus.rawValue) waiting \(p.reasonForWaitingToPlay?.rawValue ?? "-")")
                 self.isPlayingObserved = playing
                 guard playing else { return }
                 self.onPlay()
@@ -247,6 +248,9 @@ final class PreviewModel {
     private func playExcerpt(_ cue: Cue) async {
         cancelExcerpt()
         let generation = excerptGeneration
+        playbackLog.debug("preview excerpt \(String(describing: cue)) generation \(generation)")
+        // Seek paused, then play: seeking while playing races to catch up.
+        player.pause()
         let length = PlaybackSettings.shared.autoPreviewLength
         let (from, to): (Double, Double)
         var loops = false
@@ -273,7 +277,7 @@ final class PreviewModel {
         let stop = min(max(to, start + 0.1), duration)
         await quietSeek(start)
         // Superseded during the seek (another click, the source took over): stay put.
-        guard excerptGeneration == generation else { return }
+        guard excerptGeneration == generation else { return playbackLog.debug("preview excerpt \(generation) superseded") }
         if loops {
             // At the end of the span (or the clip), jump back and keep going.
             let end = min(stop, duration - 0.03)

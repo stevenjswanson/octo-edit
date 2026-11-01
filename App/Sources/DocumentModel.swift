@@ -5,6 +5,10 @@ import Core
 import Load
 import Align
 import SpeakerFraming
+import os
+
+/// Play, pause, seek and pane decisions, for diagnosing playback (`log stream --predicate 'subsystem == "edu.ucsd.OctoEdit"'`).
+let playbackLog = Logger(subsystem: "edu.ucsd.OctoEdit", category: "playback")
 
 /// Per-window state: the project (a Core value, changed only through Core operations
 /// via `perform`), load issues, selection, and the source-video player.
@@ -40,7 +44,9 @@ final class DocumentModel {
     enum Pane { case source, preview }
     /// What the video pane shows (and Space controls): the selected clip's preview,
     /// or the recording itself after a click or selection outside every clip.
-    private(set) var activePane = Pane.preview
+    private(set) var activePane = Pane.preview {
+        didSet { if activePane != oldValue { playbackLog.debug("pane → \(String(describing: self.activePane))") } }
+    }
     /// The source playhead (for the inspector's playhead line).
     private(set) var sourceTime: Double?
 
@@ -109,6 +115,8 @@ final class DocumentModel {
     @ObservationIgnored private var counter = 0
     /// Auto-preview cue for the edit being performed (consumed by the next preview refresh).
     @ObservationIgnored private var nextCue: PreviewModel.Cue?
+    /// Bumped by each word click, so a play still waiting on an earlier click's seek is dropped.
+    @ObservationIgnored private var clickGeneration = 0
 
     init() {
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 20), queue: .main) { [weak self] t in
@@ -118,6 +126,7 @@ final class DocumentModel {
             let playing = p.rate != 0
             DispatchQueue.main.async {
                 guard let self else { return }
+                playbackLog.debug("source rate \(p.rate) status \(p.timeControlStatus.rawValue) waiting \(p.reasonForWaitingToPlay?.rawValue ?? "-")")
                 self.isPlaying = playing
                 if playing {
                     self.preview.player.pause()   // one video plays at a time
@@ -520,10 +529,21 @@ final class DocumentModel {
     /// recording at the word. Playing or paused stays as it was: during playback, the
     /// video carries on from the clicked word.
     func clicked(word i: Int) {
+        clickGeneration += 1
+        let generation = clickGeneration
         let wasPlaying = player.rate != 0 || preview.player.rate != 0
-        guard let c = project.clip(containingWordAt: i) else {
+        let c = project.clip(containingWordAt: i)
+        playbackLog.debug("click word \(i) \(c == nil ? "outside" : "in clip") playing \(wasPlaying)")
+        guard let c else {
             showSource(atWord: i)
-            if wasPlaying { player.play() }
+            guard wasPlaying, let t = project.words[i].start else { return }
+            // Seek paused and play once it lands: seeking while playing races to catch up.
+            player.pause()
+            Task {
+                let landed = await player.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                guard landed, clickGeneration == generation else { return playbackLog.debug("click \(generation) play dropped") }
+                player.play()
+            }
             return
         }
         activePane = .preview
