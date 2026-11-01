@@ -64,16 +64,26 @@ final class PreviewModel {
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 20), queue: .main) { [weak self] t in
             MainActor.assumeIsolated {
                 guard let self, self.built != nil, let source = self.sourceTime(forClip: t.seconds) else { return }
+                let last = self.position
                 self.position = source
                 guard self.programmaticSeeks == 0 else { return }
+                // Paused, the observer also fires as playback stops (the time barely
+                // moves); only a real jump is the user scrubbing.
+                if self.player.rate == 0, let last, abs(source - last) < 0.1 { return }
                 self.onTime(source)
             }
         }
         rateObserver = player.observe(\.rate) { [weak self] p, _ in
             let playing = p.rate != 0
             DispatchQueue.main.async {
-                self?.isPlayingObserved = playing
-                if playing { self?.onPlay() }
+                guard let self else { return }
+                self.isPlayingObserved = playing
+                guard playing else { return }
+                self.onPlay()
+                // Play at the end of the clip (the player's own button): from the start again.
+                if self.duration > 0, self.player.currentTime().seconds >= self.duration - 0.05 {
+                    Task { await self.player.seek(to: .zero); self.player.play() }
+                }
             }
         }
     }
@@ -172,7 +182,7 @@ final class PreviewModel {
                     await playExcerpt(cue)
                 } else {
                     await quietSeek(min(target, max(duration - 0.02, 0)))
-                    if wasPlaying { player.play() }
+                    if wasPlaying && excerptGeneration == cueGeneration { player.play() }
                 }
             } catch is CancellationError {
             } catch {
@@ -236,6 +246,7 @@ final class PreviewModel {
 
     private func playExcerpt(_ cue: Cue) async {
         cancelExcerpt()
+        let generation = excerptGeneration
         let length = PlaybackSettings.shared.autoPreviewLength
         let (from, to): (Double, Double)
         var loops = false
@@ -261,7 +272,8 @@ final class PreviewModel {
         let start = min(max(from, 0), max(duration - 0.05, 0))
         let stop = min(max(to, start + 0.1), duration)
         await quietSeek(start)
-        let generation = excerptGeneration
+        // Superseded during the seek (another click, the source took over): stay put.
+        guard excerptGeneration == generation else { return }
         if loops {
             // At the end of the span (or the clip), jump back and keep going.
             let end = min(stop, duration - 0.03)
