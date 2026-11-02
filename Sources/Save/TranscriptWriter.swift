@@ -26,6 +26,9 @@ public enum TranscriptWriter {
         var defaults = "defaults: { pre: \(Grammar.duration(p.settings.prePad)), post: \(Grammar.duration(p.settings.postPad)), crossfade: \(Grammar.duration(p.settings.crossfade))"
         if let c = p.settings.codec { defaults += ", codec: \(c.rawValue)" }
         if p.settings.framing != .source { defaults += ", framing: \(quoted(p.settings.framing.rawValue))" }
+        if p.settings.speakerFade != ProjectSettings.defaultSpeakerFade {
+            defaults += ", speakerFade: \(Grammar.duration(p.settings.speakerFade))"
+        }
         out.append(defaults + " }")
         let speakers = p.speakersInOrder()
         if !speakers.isEmpty { out.append("speakers: [" + speakers.map(yaml).joined(separator: ", ") + "]") }

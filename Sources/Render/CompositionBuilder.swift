@@ -24,14 +24,13 @@ public struct CompositionBuilder {
         public let cropped: Bool
     }
 
-    /// How long a dip to a new speaker takes to fade out, and again to fade back in.
-    public static let dipHalf: Seconds = 0.1
-
     /// With `column`, each frame is cropped to a full-height 9:16 column that follows
     /// it, scaled to `outputHeight` when given (e.g. 1280 for a 720p export). `levels`,
-    /// one per segment (nil: none), adjusts tones and colours.
+    /// one per segment (nil: none), adjusts tones and colours. `speakerFade` is the
+    /// length of a column's dip to a new speaker (half out, half in; 0 cuts).
     public static func build(asset: AVURLAsset, segments: [ResolvedSegment], crossfade: Seconds,
-                             column: ColumnPath? = nil, levels: [AutoLevels?] = [], outputHeight: Int? = nil) async throws -> Output {
+                             column: ColumnPath? = nil, speakerFade: Seconds = ProjectSettings.defaultSpeakerFade,
+                             levels: [AutoLevels?] = [], outputHeight: Int? = nil) async throws -> Output {
         guard let vTrack = try await asset.loadTracks(withMediaType: .video).first else { throw RenderError.noVideoTrack }
         let aTrack = try await asset.loadTracks(withMediaType: .audio).first
         let (fps, timescale, transform) = try await (vTrack.load(.nominalFrameRate), vTrack.load(.naturalTimeScale),
@@ -106,7 +105,7 @@ public struct CompositionBuilder {
         let crops = column.map { $0.width < 0.999 } ?? false
         if crops || usedLevels.contains(where: { $0 != nil }) {
             let size = try await vTrack.load(.naturalSize).applying(transform)
-            video = try await filtered(comp, column: crops ? column : nil, levels: usedLevels,
+            video = try await filtered(comp, column: crops ? column : nil, speakerFade: speakerFade, levels: usedLevels,
                                        frame: CGSize(width: abs(size.width), height: abs(size.height)),
                                        starts: starts, ranges: used, fps: rate, outputHeight: outputHeight)
         }
@@ -117,7 +116,7 @@ public struct CompositionBuilder {
     /// Each frame through Core Image: its segment's levels, then (with a column) a
     /// column-sized crop that holds between keys and changes at each key, with a dip
     /// through black around the keys that move to a new speaker.
-    static func filtered(_ comp: AVMutableComposition, column: ColumnPath?, levels: [AutoLevels?], frame: CGSize,
+    static func filtered(_ comp: AVMutableComposition, column: ColumnPath?, speakerFade: Seconds, levels: [AutoLevels?], frame: CGSize,
                          starts: [Seconds], ranges: [ResolvedSegment], fps: Double,
                          outputHeight: Int?) async throws -> AVVideoComposition {
         let even = { (v: Double) in CGFloat(max(2, Int((v / 2).rounded()) * 2)) }
@@ -127,14 +126,14 @@ public struct CompositionBuilder {
         // Clip times of the dips: keys inside a segment (a key at a segment's start is
         // a join, which cuts).
         var dips: [Seconds] = []
-        if let column {
+        let half = speakerFade / 2
+        if let column, half > 0 {
             for (k, r) in ranges.enumerated() {
                 for key in column.keys where key.dips && key.t > r.start && key.t < r.end {
                     dips.append(key.t - r.start + starts[k])
                 }
             }
         }
-        let half = dipHalf
         let video = try await AVMutableVideoComposition.videoComposition(with: comp) { request in
             let t = request.compositionTime.seconds
             let k = max((starts.lastIndex { $0 <= t + 1e-6 }) ?? 0, 0)

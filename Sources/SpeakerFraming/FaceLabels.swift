@@ -131,9 +131,12 @@ public struct FaceLabels: Sendable {
     // MARK: Labels
 
     /// Per sampled frame with someone speaking, the face whose mouth moves most (by a
-    /// 1.3× margin over the next) votes for that speaker. A track takes the speaker it
-    /// won most often, if it won at least a second's worth and at least half the frames
-    /// it was on screen while that speaker talked.
+    /// 1.3× margin over the next) votes for that speaker. Votes are pooled by seat: the
+    /// camera keeps coming back to the same framing and people stay in their chairs, so
+    /// tracks at the same place and size in any shot are one person. A seat takes the
+    /// speaker it won most often, if it won at least a second's worth and at least half
+    /// the frames it was on screen while that speaker talked; in one shot, two seats
+    /// can't both be the same speaker (the stronger keeps it).
     static func label(_ tracks: [Track], frames: [FaceFrame], voices: SpeechTimeline) -> [Track] {
         var tracks = tracks
         let dt = frames.count > 1 ? max((frames.last!.t - frames.first!.t) / Double(frames.count - 1), 0.01) : 0.1
@@ -160,14 +163,66 @@ public struct FaceLabels: Sendable {
                 won[ranked[0].track, default: [:]][speaker, default: 0] += 1
             }
         }
+        let seatOf = seats(tracks)
+        var seatWon: [Int: [String: Int]] = [:], seatHeard: [Int: [String: Int]] = [:]
+        for id in tracks.indices {
+            for (n, c) in won[id] ?? [:] { seatWon[seatOf[id], default: [:]][n, default: 0] += c }
+            for (n, c) in heard[id] ?? [:] { seatHeard[seatOf[id], default: [:]][n, default: 0] += c }
+        }
         let minimum = Int((1.0 / dt).rounded())
         for id in tracks.indices {
-            guard let (name, count) = won[id]?.max(by: { $0.value < $1.value }) else { continue }
-            let score = Double(count) / Double(max(heard[id]?[name] ?? 1, 1))
+            let seat = seatOf[id]
+            guard let (name, count) = seatWon[seat]?.max(by: { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key })
+            else { continue }
+            let score = Double(count) / Double(max(seatHeard[seat]?[name] ?? 1, 1))
             tracks[id].score = score
             if count >= minimum, score >= 0.5 { tracks[id].speaker = name }
         }
+        // One face per speaker per shot.
+        let byShot = Dictionary(grouping: tracks.indices, by: { tracks[$0].shot })
+        for (_, ids) in byShot {
+            for (_, same) in Dictionary(grouping: ids.filter { tracks[$0].speaker != nil }, by: { tracks[$0].speaker! }) {
+                // Overlapping in time: keep the stronger; one person's track split in two is fine.
+                for a in same {
+                    for b in same where b != a && tracks[b].speaker != nil && overlap(tracks[a], tracks[b])
+                    && (tracks[b].score, -b) < (tracks[a].score, -a) {
+                        tracks[b].speaker = nil
+                    }
+                }
+            }
+        }
         return tracks
+    }
+
+    /// Whether two tracks are on screen at the same time.
+    static func overlap(_ a: Track, _ b: Track) -> Bool {
+        guard let a0 = a.samples.first?.t, let a1 = a.samples.last?.t, let b0 = b.samples.first?.t, let b1 = b.samples.last?.t
+        else { return false }
+        return a0 <= b1 && b0 <= a1
+    }
+
+    /// Track → seat: tracks whose typical face is in the same place at the same size
+    /// (within 0.04 of the frame width, 0.05 of its height, and 25% in size).
+    static func seats(_ tracks: [Track]) -> [Int] {
+        func median(_ v: [Double]) -> Double { let s = v.sorted(); return s.isEmpty ? 0 : s[s.count / 2] }
+        let where_ = tracks.map { t in (x: median(t.samples.map(\.box.centerX)), y: median(t.samples.map(\.box.centerY)),
+                                       h: median(t.samples.map(\.box.h))) }
+        var seats: [(x: Double, y: Double, h: Double, n: Int)] = []
+        var out: [Int] = []
+        // Longest tracks first, so a seat is anchored on a steady face.
+        var seatOf = [Int](repeating: 0, count: tracks.count)
+        for id in tracks.indices.sorted(by: { tracks[$0].samples.count > tracks[$1].samples.count }) {
+            let w = where_[id]
+            if let k = seats.firstIndex(where: { abs($0.x - w.x) < 0.04 && abs($0.y - w.y) < 0.05 && abs($0.h - w.h) < 0.25 * max($0.h, w.h) }) {
+                seatOf[id] = k
+                seats[k].n += 1
+            } else {
+                seatOf[id] = seats.count
+                seats.append((w.x, w.y, w.h, 1))
+            }
+        }
+        out = seatOf
+        return out
     }
 }
 

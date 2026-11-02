@@ -285,6 +285,12 @@ extension DocumentModel {
         perform("Framing") { $0.settings.framing = framing }
     }
 
+    func setSpeakerFade(_ seconds: Double) {
+        let v = (seconds * 100).rounded() / 100
+        guard v != project.settings.speakerFade else { return }
+        perform("Speaker Fade") { $0.settings.speakerFade = v }
+    }
+
     /// Which face is whose, from the current paragraph speakers; recomputed only when
     /// the faces or the speakers' words change.
     var faceLabels: FaceLabels? {

@@ -2,8 +2,8 @@ import SwiftUI
 import Core
 import SpeakerFraming
 
-/// Show faces: a dot in the speaker's colour on each face in the video pane, with the
-/// speaker's name (grey and unnamed when the face isn't anyone's yet). Drawn over the
+/// Show faces: a circle in the speaker's colour around each face in the video pane,
+/// with the speaker's name below (grey and unnamed when the face isn't anyone's yet). Drawn over the
 /// player, so it is never part of an export.
 struct FaceOverlay: View {
     let model: DocumentModel
@@ -20,7 +20,7 @@ struct FaceOverlay: View {
                 ForEach(Array(labels.faces(at: t).enumerated()), id: \.offset) { _, face in
                     let nx = (face.box.centerX - left) / w
                     if nx >= 0, nx <= 1 {
-                        marker(face.speaker)
+                        marker(face.speaker, diameter: max(face.box.h * rect.height * 1.5, 16))
                             .position(x: rect.minX + nx * rect.width, y: rect.minY + face.box.centerY * rect.height)
                     }
                 }
@@ -34,19 +34,20 @@ struct FaceOverlay: View {
         model.activePane == .source ? model.sourceTime : preview.position
     }
 
-    private func marker(_ speaker: String?) -> some View {
+    /// A ring centred on the face, its name hanging below it.
+    private func marker(_ speaker: String?, diameter: Double) -> some View {
         let color = speaker.map { Color(model.speakerColor($0)) } ?? .gray
-        return VStack(spacing: 2) {
-            Circle().fill(color).frame(width: 14, height: 14)
-                .overlay(Circle().stroke(.white, lineWidth: 2))
-            Text(speaker ?? "?")
-                .font(.caption.bold()).foregroundStyle(.white)
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(Capsule().fill(color.opacity(0.85)))
-                .fixedSize()
-        }
-        .shadow(radius: 2)
-        .offset(y: 10)   // the dot, not the stack, sits on the face
+        return Circle().stroke(color, lineWidth: 2.5)
+            .frame(width: diameter, height: diameter)
+            .overlay(alignment: .bottom) {
+                Text(speaker ?? "?")
+                    .font(.caption.bold()).foregroundStyle(.white)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(color.opacity(0.85)))
+                    .fixedSize()
+                    .offset(y: 18)
+            }
+            .shadow(radius: 2)
     }
 
     /// Where a frame of this width ÷ height lands, fitted in `size` (the player letterboxes).

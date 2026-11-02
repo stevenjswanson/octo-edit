@@ -158,14 +158,20 @@ public struct ProjectSettings: Equatable, Sendable {
     /// nil = same codec as the input video.
     public var codec: Codec?
     public var framing: Framing
+    /// 9:16: how long a move to a new speaker takes, fading to black and back in
+    /// (half each way); 0 cuts.
+    public var speakerFade: Seconds
+
+    public static let defaultSpeakerFade: Seconds = 0.2
 
     public init(prePad: Seconds = 0.12, postPad: Seconds = 0.18, crossfade: Seconds = 0.02, codec: Codec? = nil,
-                framing: Framing = .source) {
+                framing: Framing = .source, speakerFade: Seconds = Self.defaultSpeakerFade) {
         self.prePad = prePad
         self.postPad = postPad
         self.crossfade = crossfade
         self.codec = codec
         self.framing = framing
+        self.speakerFade = speakerFade
     }
 }
 

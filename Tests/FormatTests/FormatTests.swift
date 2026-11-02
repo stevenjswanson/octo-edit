@@ -164,6 +164,16 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         #expect(p.words[word(p, "fiscal-year-2027")].start == original.words[word(original, "FY27")].start)
     }
 
+    @Test func speakerFadeIsWrittenOnlyWhenChanged() {
+        var p = parse(handWritten).project
+        #expect(p.settings.speakerFade == ProjectSettings.defaultSpeakerFade)
+        #expect(!TranscriptWriter.write(p).contains("speakerFade"))
+        p.settings.speakerFade = 0.35
+        let out = TranscriptWriter.write(p)
+        #expect(out.contains("speakerFade: 350ms"))
+        #expect(parse(out).project.settings.speakerFade == 0.35)
+    }
+
     @Test func autoLevelsRoundTripOnTheClipMarker() throws {
         let text = handWritten.replacingOccurrences(of: "{clip \"Hiring plan\"}", with: "{clip \"Hiring plan\" levels}")
             .replacingOccurrences(of: "{clip \"Welcome\" -200ms}", with: "{clip \"Welcome\" -200ms levels}")

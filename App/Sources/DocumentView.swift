@@ -78,7 +78,9 @@ struct VideoPane: View {
                         .onChange(of: settings.portraitPreview) { model.refreshPreviewNow() }
                     Spacer()
                 }
-                .padding(.horizontal, 10).padding(.bottom, 8)
+                .padding(.horizontal, 10).padding(.bottom, 4)
+                SpeakerFadeSlider(model: model)
+                    .padding(.horizontal, 10).padding(.bottom, 8)
             }
             .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
             .background(Color(nsColor: .underPageBackgroundColor))
@@ -170,5 +172,32 @@ struct IssuesBanner: View {
         if errors > 0 { parts.append("\(errors) error\(errors == 1 ? "" : "s") in transcript.md — fix them in your editor; rendering is disabled") }
         if warnings > 0 { parts.append("\(warnings) warning\(warnings == 1 ? "" : "s")") }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// 9:16: how long the column takes to move to a new speaker, fading to black and back
+/// (0 cuts). A project setting, saved as `speakerFade` and used by exports; the
+/// preview rebuilds when the slider is let go.
+struct SpeakerFadeSlider: View {
+    let model: DocumentModel
+    @State private var value: Double?
+
+    var body: some View {
+        let shown = value ?? model.project.settings.speakerFade
+        HStack(spacing: 6) {
+            Text("Speaker fade").font(.caption)
+            Slider(value: Binding(get: { shown }, set: { value = $0 }), in: 0...1, step: 0.05) { editing in
+                if !editing, let v = value {
+                    model.setSpeakerFade(v)
+                    value = nil
+                }
+            }
+            .controlSize(.small)
+            Text(shown == 0 ? "cut" : String(format: "%.2f s", shown))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .trailing)
+        }
+        .disabled(!model.canEdit)
+        .help("9:16: how long a move to a new speaker takes, fading to black and back in. Saved with the project; exports use it.")
     }
 }

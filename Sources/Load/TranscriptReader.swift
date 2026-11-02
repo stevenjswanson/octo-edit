@@ -339,6 +339,7 @@ struct Reader {
             if let v = ms("pre") { project.settings.prePad = v }
             if let v = ms("post") { project.settings.postPad = v }
             if let v = ms("crossfade") { project.settings.crossfade = v }
+            if let v = ms("speakerFade") { project.settings.speakerFade = max(v, 0) }
             if let c = d["codec"] as? String {
                 if let codec = Codec(rawValue: c) { project.settings.codec = codec } else { error("defaults.codec must be hevc or h264", 2) }
             }

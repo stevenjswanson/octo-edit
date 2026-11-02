@@ -121,7 +121,7 @@ public struct Renderer {
         guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
         let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
                                                        crossfade: project.settings.crossfade,
-                                                       column: column(segments, options), levels: levels([(clip, segments)]),
+                                                       column: column(segments, options), speakerFade: project.settings.speakerFade, levels: levels([(clip, segments)]),
                                                        outputHeight: outputHeight(options))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(baseName(slug, options) + ".mp4")
@@ -171,7 +171,7 @@ public struct Renderer {
         guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
         let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
                                                        crossfade: project.settings.crossfade,
-                                                       column: column(segments, options),
+                                                       column: column(segments, options), speakerFade: project.settings.speakerFade,
                                                        levels: levels(Array(zip(clips, perClip))),
                                                        outputHeight: outputHeight(options))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

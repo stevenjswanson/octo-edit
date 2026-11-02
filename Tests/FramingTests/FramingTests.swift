@@ -5,8 +5,9 @@ import Foundation
 import MarkupGrammar
 
 /// Two seated people, A on the left (x≈0.2) and B on the right (x≈0.7), sampled at
-/// 10 fps for 20 s with a cut at 10 s after which they swap seats. A talks for the
-/// first 5 s of each shot, B for the rest; whoever talks moves their mouth.
+/// 10 fps for 20 s with a cut at 10 s to another camera (closer, from the other side)
+/// where they appear swapped. A talks for the first 5 s of each shot, B for the rest;
+/// whoever talks moves their mouth.
 func panel() -> (FaceTracks, Project) {
     var frames: [FaceFrame] = []
     for k in 0..<200 {
@@ -15,7 +16,8 @@ func panel() -> (FaceTracks, Project) {
         let swapped = t >= 10
         let aTalks = inShot < 5
         func face(_ x: Double, talking: Bool) -> FaceBox {
-            FaceBox(x: x, y: 0.3, w: 0.06, h: 0.1, mouthOpen: talking ? (k % 2 == 0 ? 0.3 : 0.05) : 0.1, mouthWidth: 0.5)
+            FaceBox(x: x, y: swapped ? 0.2 : 0.3, w: 0.06, h: swapped ? 0.15 : 0.1,
+                    mouthOpen: talking ? (k % 2 == 0 ? 0.3 : 0.05) : 0.1, mouthWidth: 0.5)
         }
         let a = face(swapped ? 0.67 : 0.17, talking: aTalks), b = face(swapped ? 0.17 : 0.67, talking: !aTalks)
         frames.append(FaceFrame(t: t, change: k == 100 ? 60 : 1, faces: [a, b]))
@@ -47,6 +49,27 @@ func panel() -> (FaceTracks, Project) {
         #expect(abs(a1 - 0.2) < 0.01 && abs(b1 - 0.7) < 0.01 && abs(a2 - 0.7) < 0.01)
         #expect(labels.face(of: "B", at: 13)?.centerX ?? 0 < 0.3)
         #expect(Set(labels.portraits().keys) == ["A", "B"])
+    }
+
+    @Test func aShortReturnToTheSameFramingKeepsItsLabels() {
+        // The wide shot (A left, B right), a 0.5 s cutaway, then the wide shot again for
+        // 1 s with nobody's mouth moving: too little to label on its own.
+        var frames: [FaceFrame] = []
+        for k in 0..<120 {
+            let t = Double(k) / 10
+            let cutaway = t >= 10 && t < 10.5, quiet = t >= 10.5
+            let aTalks = t < 5
+            func face(_ x: Double, talking: Bool) -> FaceBox {
+                FaceBox(x: x, y: 0.3, w: 0.06, h: 0.1, mouthOpen: talking && !quiet ? (k % 2 == 0 ? 0.3 : 0.05) : 0.1, mouthWidth: 0.5)
+            }
+            let faces = cutaway ? [FaceBox(x: 0.45, y: 0.1, w: 0.2, h: 0.35)] : [face(0.17, talking: aTalks), face(0.67, talking: !aTalks)]
+            frames.append(FaceFrame(t: t, change: k == 100 || k == 105 ? 60 : 1, faces: faces))
+        }
+        let (_, p) = panel()
+        let labels = FaceLabels(faces: FaceTracks(width: 3840, height: 2160, frames: frames), project: p)
+        #expect(labels.shotStarts == [0, 10, 10.5])
+        #expect(labels.face(of: "A", at: 11)?.centerX ?? 0 < 0.3)
+        #expect(labels.face(of: "B", at: 11)?.centerX ?? 0 > 0.6)
     }
 
     @Test func relabellingAHeaderMovesTheFace() {
