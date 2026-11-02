@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Above the transcript: Cut / Edit Text mode, Follow playhead, and search.
+/// Above the transcript: Cut / Edit Text mode, Follow playhead, Show faces, and search.
 struct TranscriptToolbar: View {
     @Bindable var model: DocumentModel
+    @Bindable private var settings = PlaybackSettings.shared
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -35,6 +36,10 @@ struct TranscriptToolbar: View {
             Toggle("Follow playhead", isOn: $model.followPlayhead)
                 .toggleStyle(.checkbox)
                 .help("Keep the playing word in view while a video plays")
+
+            Toggle("Show faces", isOn: $settings.showFaces)
+                .toggleStyle(.checkbox)
+                .help("Label the faces in the video with their speaker (never exported). Needs Find Faces first.")
 
             if model.textEditing {
                 Text("Editing words — clips and timing are kept. Changes apply when you switch back to Cut.")

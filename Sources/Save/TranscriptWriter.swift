@@ -131,7 +131,7 @@ public enum TranscriptWriter {
             }
             var text = p.words[i].text
             if let clip = m.open[i] {
-                var marker = Grammar.clipOpen(name: clip.name, offset: clip.segments.first?.inPoint.offset)
+                var marker = Grammar.clipOpen(name: clip.name, offset: clip.segments.first?.inPoint.offset, levels: clip.autoLevels)
                 if !clip.notes.isEmpty, let slug = slugs[clip.id] { marker += Grammar.noteReference(slug) }
                 text = marker + " " + text
             }

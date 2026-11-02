@@ -26,6 +26,9 @@ final class PreviewModel {
     @ObservationIgnored private var built: CompositionBuilder.Output?
     @ObservationIgnored private var shownSegments: [ResolvedSegment] = []
     @ObservationIgnored private var shownColumn: ColumnPath?
+    @ObservationIgnored private var shownLevels = false
+    /// The 9:16 column the preview is cropped to, if any.
+    var column: ColumnPath? { shownColumn }
     /// Whose face is where, for the 9:16 column (nil: a centred column).
     @ObservationIgnored var faceLabels: () -> FaceLabels? = { nil }
     /// The source frame's width ÷ height.
@@ -129,7 +132,7 @@ final class PreviewModel {
                          labels: faceLabels(), aspect: aspect)
             : nil
         let sameClip = clip.id == clipID
-        guard !sameClip || segs != shownSegments || column != shownColumn else { return }
+        guard !sameClip || segs != shownSegments || column != shownColumn || clip.autoLevels != shownLevels else { return }
         // Same clip edited: stay at the same moment of the recording (not the same clip
         // time, which shifts when material before it is cut).
         let wasPlaying = player.rate != 0
@@ -147,6 +150,7 @@ final class PreviewModel {
         clipID = clip.id
         shownSegments = segs
         shownColumn = column
+        shownLevels = clip.autoLevels
         message = nil
         // Seeks that arrive before the new composition exists wait for it.
         if !sameClip { built = nil }
@@ -155,7 +159,10 @@ final class PreviewModel {
         let crossfade = project.settings.crossfade
         job = Task {
             do {
-                let out = try await CompositionBuilder.build(asset: asset, segments: segs, crossfade: crossfade, column: column)
+                let levels = clip.autoLevels ? try await AutoLevels.measure(asset, segments: segs) : nil
+                try Task.checkCancellation()
+                let out = try await CompositionBuilder.build(asset: asset, segments: segs, crossfade: crossfade, column: column,
+                                                             levels: Array(repeating: levels, count: segs.count))
                 try Task.checkCancellation()
                 let item = AVPlayerItem(asset: out.composition)
                 item.audioMix = out.audioMix

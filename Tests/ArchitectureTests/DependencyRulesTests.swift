@@ -30,6 +30,7 @@ import Foundation
         "FoundationModels": ["Naming"],
         "FluidAudio": ["Diarize"],
         "Vision": ["FaceTrack"],
+        "CoreImage": ["Render"],
         "AVFoundation": ["Transcribe", "Waveform", "Diarize", "FaceTrack", "Render"],
         "AVFAudio": ["Transcribe", "Waveform", "Diarize", "FaceTrack", "Render"],
         "CoreMedia": ["Transcribe", "Waveform", "Diarize", "FaceTrack", "Render"],

@@ -20,8 +20,15 @@ final class PlaybackSettings {
         didSet { UserDefaults.standard.set(portraitPreview, forKey: "portraitPreview") }
     }
 
+    /// Label the faces on the video with a dot in their speaker's colour and the name
+    /// (a viewing aid only; never exported).
+    var showFaces: Bool {
+        didSet { UserDefaults.standard.set(showFaces, forKey: "showFaces") }
+    }
+
     private init() {
         let d = UserDefaults.standard
+        showFaces = d.object(forKey: "showFaces") as? Bool ?? false
         portraitPreview = d.object(forKey: "portraitPreview") as? Bool ?? false
         autoPreview = d.object(forKey: "autoPreview") as? Bool ?? true
         autoPreviewLength = d.object(forKey: "autoPreviewLength") as? Double ?? 2

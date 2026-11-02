@@ -17,6 +17,11 @@ extension DocumentModel {
         perform("Rename Clip") { try $0.setName(clip: id, trimmed.isEmpty ? nil : trimmed) }
     }
 
+    func setAutoLevels(_ id: ClipID, _ on: Bool) {
+        guard project.clip(id)?.autoLevels != on else { return }
+        perform(on ? "Turn On Auto Levels" : "Turn Off Auto Levels") { try $0.setAutoLevels(clip: id, on) }
+    }
+
     func setNotes(_ id: ClipID, _ notes: String) {
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         guard project.clip(id)?.notes != trimmed else { return }

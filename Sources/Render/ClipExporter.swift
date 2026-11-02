@@ -44,7 +44,7 @@ public enum ClipExporter {
     public static func export(_ built: CompositionBuilder.Output, info: SourceInfo, quality: Quality, to url: URL,
                               progress: @escaping @Sendable (Double) -> Void) async throws {
         // A cropped frame matches no fixed-size preset; these keep the render size.
-        let presetName = built.videoComposition == nil ? preset(for: info, quality: quality)
+        let presetName = !built.cropped ? preset(for: info, quality: quality)
             : quality == .full(.hevc) ? AVAssetExportPresetHEVCHighestQuality : AVAssetExportPresetHighestQuality
         guard let session = AVAssetExportSession(asset: built.composition, presetName: presetName) else {
             throw RenderError.exportFailed("no export session for this source")
@@ -53,8 +53,8 @@ public enum ClipExporter {
         // A video composition forces a real re-encode. Without it AVFoundation may pass
         // the source's GOPs through and hide the extra frames with edit lists, which many
         // players and upload sites ignore (stray frames at every cut).
-        if let crop = built.videoComposition {
-            session.videoComposition = crop
+        if let filtered = built.videoComposition {
+            session.videoComposition = filtered
         } else {
             session.videoComposition = try await AVVideoComposition.videoComposition(withPropertiesOf: built.composition)
         }

@@ -58,6 +58,18 @@ public struct FaceLabels: Sendable {
         return best?.box
     }
 
+    /// Every face on screen at `t`: in each track of the shot playing then, the sample
+    /// nearest `t` (within 0.3 s), with the track's speaker when known.
+    public func faces(at t: Seconds) -> [(box: FaceBox, speaker: String?)] {
+        let s = shot(at: t)
+        return tracks.compactMap { tr in
+            guard tr.shot == s, let first = tr.samples.first, let last = tr.samples.last,
+                  first.t - 0.3 <= t, t <= last.t + 0.3,
+                  let near = tr.samples.min(by: { abs($0.t - t) < abs($1.t - t) }), abs(near.t - t) <= 0.3 else { return nil }
+            return (near.box, tr.speaker)
+        }
+    }
+
     /// Where the speaker's face sits in the shot playing at `t`: the median centre of
     /// their face over the shot. Steadier than any one sample.
     public func position(of speaker: String, inShotAt t: Seconds) -> Double? {

@@ -1,12 +1,15 @@
 import Foundation
 import AVFoundation
+import CoreImage
 import Core
 import SpeakerFraming
 
 /// Turns a clip's source-time segments into a composition: hard video cuts on frame
 /// boundaries, and audio that overlaps by `crossfade` at each join with opposing
 /// volume ramps (segments alternate between two audio tracks so they can overlap).
-/// The same composition drives preview and export, so they cannot diverge.
+/// The same composition drives preview and export, so they cannot diverge. Frames
+/// pass through Core Image when they need work: the 9:16 column (dipping through
+/// black when it moves to a new speaker) and auto-levels.
 public struct CompositionBuilder {
     public struct Output {
         public let composition: AVMutableComposition
@@ -15,14 +18,20 @@ public struct CompositionBuilder {
         public let segmentStarts: [Seconds]
         /// The frame-snapped source ranges actually used.
         public let sourceRanges: [ResolvedSegment]
-        /// The 9:16 crop, when framing asks for one (nil: the frame as it came in).
+        /// The 9:16 crop and auto-levels, when asked for (nil: the frames as they came in).
         public let videoComposition: AVVideoComposition?
+        /// Whether `videoComposition` crops to a 9:16 column (a size no export preset has).
+        public let cropped: Bool
     }
 
+    /// How long a dip to a new speaker takes to fade out, and again to fade back in.
+    public static let dipHalf: Seconds = 0.1
+
     /// With `column`, each frame is cropped to a full-height 9:16 column that follows
-    /// it, scaled to `outputHeight` when given (e.g. 1280 for a 720p export).
+    /// it, scaled to `outputHeight` when given (e.g. 1280 for a 720p export). `levels`,
+    /// one per segment (nil: none), adjusts tones and colours.
     public static func build(asset: AVURLAsset, segments: [ResolvedSegment], crossfade: Seconds,
-                             column: ColumnPath? = nil, outputHeight: Int? = nil) async throws -> Output {
+                             column: ColumnPath? = nil, levels: [AutoLevels?] = [], outputHeight: Int? = nil) async throws -> Output {
         guard let vTrack = try await asset.loadTracks(withMediaType: .video).first else { throw RenderError.noVideoTrack }
         let aTrack = try await asset.loadTracks(withMediaType: .audio).first
         let (fps, timescale, transform) = try await (vTrack.load(.nominalFrameRate), vTrack.load(.naturalTimeScale),
@@ -62,8 +71,10 @@ public struct CompositionBuilder {
         var cursor = CMTime.zero
         var starts: [Seconds] = []
         var used: [ResolvedSegment] = []
-        let snapped = segments.map { (snap($0.start), snap($0.end)) }.filter { $0.1 > $0.0 }
-        for (k, (start, end)) in snapped.enumerated() {
+        var usedLevels: [AutoLevels?] = []
+        let snapped = segments.enumerated().map { (snap($1.start), snap($1.end), $0 < levels.count ? levels[$0] : nil) }
+            .filter { $0.1 > $0.0 }
+        for (k, (start, end, level)) in snapped.enumerated() {
             let range = CMTimeRange(start: start, end: end)
             try cv.insertTimeRange(range, of: vTrack, at: cursor)
             if let aTrack, audioTracks.count == 2 {
@@ -83,6 +94,7 @@ public struct CompositionBuilder {
             }
             starts.append(cursor.seconds)
             used.append(ResolvedSegment(start: start.seconds, end: end.seconds))
+            usedLevels.append(level)
             cursor = cursor + range.duration
         }
         var mix: AVMutableAudioMix?
@@ -91,45 +103,64 @@ public struct CompositionBuilder {
             mix!.inputParameters = params
         }
         var video: AVVideoComposition?
-        if let column, column.width < 0.999 {
+        let crops = column.map { $0.width < 0.999 } ?? false
+        if crops || usedLevels.contains(where: { $0 != nil }) {
             let size = try await vTrack.load(.naturalSize).applying(transform)
-            video = crop(comp, track: cv, column: column, transform: transform,
-                         frame: CGSize(width: abs(size.width), height: abs(size.height)),
-                         starts: starts, ranges: used, fps: rate, outputHeight: outputHeight)
+            video = try await filtered(comp, column: crops ? column : nil, levels: usedLevels,
+                                       frame: CGSize(width: abs(size.width), height: abs(size.height)),
+                                       starts: starts, ranges: used, fps: rate, outputHeight: outputHeight)
         }
-        return Output(composition: comp, audioMix: mix, segmentStarts: starts, sourceRanges: used, videoComposition: video)
+        return Output(composition: comp, audioMix: mix, segmentStarts: starts, sourceRanges: used,
+                      videoComposition: video, cropped: crops)
     }
 
-    /// A video composition that moves the frame left so the column lands in a
-    /// column-sized render area: constant between keys, cutting at each key.
-    static func crop(_ comp: AVMutableComposition, track: AVMutableCompositionTrack, column: ColumnPath,
-                     transform: CGAffineTransform, frame: CGSize, starts: [Seconds], ranges: [ResolvedSegment],
-                     fps: Double, outputHeight: Int?) -> AVVideoComposition {
+    /// Each frame through Core Image: its segment's levels, then (with a column) a
+    /// column-sized crop that holds between keys and changes at each key, with a dip
+    /// through black around the keys that move to a new speaker.
+    static func filtered(_ comp: AVMutableComposition, column: ColumnPath?, levels: [AutoLevels?], frame: CGSize,
+                         starts: [Seconds], ranges: [ResolvedSegment], fps: Double,
+                         outputHeight: Int?) async throws -> AVVideoComposition {
         let even = { (v: Double) in CGFloat(max(2, Int((v / 2).rounded()) * 2)) }
-        let columnWidth = Double(frame.width) * column.width
-        let scale = outputHeight.map { Double($0) / Double(frame.height) } ?? 1
-        let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-        func placed(_ x: Double) -> CGAffineTransform {
-            let left = x * Double(frame.width) - columnWidth / 2
-            return transform.concatenating(CGAffineTransform(translationX: -left, y: 0))
-                .concatenating(CGAffineTransform(scaleX: scale, y: scale))
-        }
-        let ts: CMTimeScale = 600
-        for (k, r) in ranges.enumerated() {
-            let offset = starts[k] - r.start
-            let at = { (t: Seconds) in CMTime(seconds: t + offset, preferredTimescale: ts) }
-            layer.setTransform(placed(column.x(at: r.start)), at: at(r.start))
-            for key in column.keys where key.t > r.start && key.t < r.end {
-                layer.setTransform(placed(key.x), at: at(key.t))
+        let columnWidth = Double(frame.width) * (column?.width ?? 1)
+        let scale = column == nil ? 1 : outputHeight.map { Double($0) / Double(frame.height) } ?? 1
+        let render = CGSize(width: even(columnWidth * scale), height: even(Double(frame.height) * scale))
+        // Clip times of the dips: keys inside a segment (a key at a segment's start is
+        // a join, which cuts).
+        var dips: [Seconds] = []
+        if let column {
+            for (k, r) in ranges.enumerated() {
+                for key in column.keys where key.dips && key.t > r.start && key.t < r.end {
+                    dips.append(key.t - r.start + starts[k])
+                }
             }
         }
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: comp.duration)
-        instruction.layerInstructions = [layer]
-        let video = AVMutableVideoComposition()
-        video.renderSize = CGSize(width: even(columnWidth * scale), height: even(Double(frame.height) * scale))
+        let half = dipHalf
+        let video = try await AVMutableVideoComposition.videoComposition(with: comp) { request in
+            let t = request.compositionTime.seconds
+            let k = max((starts.lastIndex { $0 <= t + 1e-6 }) ?? 0, 0)
+            var image = request.sourceImage
+            if k < levels.count, let l = levels[k] { image = l.apply(image) }
+            if let column {
+                let e = image.extent
+                let x = column.x(at: ranges[k].start + (t - starts[k]))
+                let left = e.minX + x * e.width - columnWidth / 2
+                image = image.cropped(to: CGRect(x: left, y: e.minY, width: columnWidth, height: e.height))
+                    .transformed(by: CGAffineTransform(translationX: -left, y: -e.minY))
+                    .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                if let d = dips.map({ abs($0 - t) }).min(), d < half {
+                    let f = d / half
+                    image = image.applyingFilter("CIColorMatrix", parameters: [
+                        "inputRVector": CIVector(x: f, y: 0, z: 0, w: 0),
+                        "inputGVector": CIVector(x: 0, y: f, z: 0, w: 0),
+                        "inputBVector": CIVector(x: 0, y: 0, z: f, w: 0),
+                    ])
+                }
+                image = image.cropped(to: CGRect(origin: .zero, size: render))
+            }
+            request.finish(with: image, context: nil)
+        }
+        video.renderSize = render
         video.frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(fps.rounded(), 1)))
-        video.instructions = [instruction]
         return video
     }
 }

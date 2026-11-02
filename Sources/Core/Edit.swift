@@ -304,6 +304,10 @@ extension Project {
         clips[try clipIndex(id)].name = (trimmed?.isEmpty ?? true) ? nil : trimmed
     }
 
+    public mutating func setAutoLevels(clip id: ClipID, _ on: Bool) throws {
+        clips[try clipIndex(id)].autoLevels = on
+    }
+
     public mutating func setNotes(clip id: ClipID, _ notes: String) throws {
         clips[try clipIndex(id)].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
     }

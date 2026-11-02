@@ -9,8 +9,8 @@ import Core
 /// - it switches to a new speaker only when their turn lasts at least `hold`, so a
 ///   one-word interjection doesn't swing the picture; for the same reason a clip opens
 ///   on its first speaker with such a turn, not on whoever's last word it starts in;
-/// - every move is an instant cut, never a pan: on a speaker change, and with each
-///   cut in the source;
+/// - every move is a cut, never a pan: a quick dip through black on a speaker change
+///   (`Key.dips`), a hard cut with each cut in the source;
 /// - when the speaker's face isn't in the shot it stays where it was in that shot,
 ///   or is centred when the shot just began.
 public struct ColumnPath: Sendable, Equatable {
@@ -19,9 +19,14 @@ public struct ColumnPath: Sendable, Equatable {
         public var t: Seconds
         /// Column centre from `t` on, a fraction of the frame width (already clamped).
         public var x: Double
+        /// A move to a new speaker within one shot, which dips through black rather than
+        /// cutting hard (a cut in the source, or the clip's start, never dips).
+        public var dips = false
     }
 
     public let keys: [Key]
+    /// A speaker change this close to a cut in the source counts as at it.
+    static let cutSlack: Seconds = 0.25
     /// Column width as a fraction of the frame width.
     public let width: Double
 
@@ -56,7 +61,9 @@ public struct ColumnPath: Sendable, Equatable {
             while i < changes.count || j < cuts.count {
                 if j >= cuts.count || (i < changes.count && changes[i].t < cuts[j]) {
                     current = changes[i].speaker
-                    events.append((changes[i].t, current, false))
+                    // A change at a cut in the source rides on that cut, without a dip.
+                    let atCut = cuts.contains { abs($0 - changes[i].t) < Self.cutSlack }
+                    events.append((changes[i].t, current, atCut))
                     i += 1
                 } else {
                     events.append((cuts[j], current, true))
@@ -70,7 +77,9 @@ public struct ColumnPath: Sendable, Equatable {
                 let target = e.speaker.flatMap { labels?.position(of: $0, inShotAt: e.t) }
                 let x = clamp(target ?? last ?? 0.5)
                 if e.t != seg.start, x == keys.last?.x { continue }
-                keys.append(Key(t: e.t, x: x))
+                // Two events at one time (a change exactly at a cut): the later decides.
+                if let k = keys.last, k.t == e.t { keys.removeLast() }
+                keys.append(Key(t: e.t, x: x, dips: !e.cut))
                 last = x
             }
         }

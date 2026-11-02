@@ -91,13 +91,15 @@ func project(_ turns: [(start: Double, end: Double, speaker: String)]) -> Projec
         #expect(abs(path.width - 0.31640625) < 1e-9)   // 1215 of 3840 pixels
         #expect(abs(path.x(at: 2) - 0.2) < 0.01)
         #expect(abs(path.x(at: 4.99) - 0.2) < 0.01)
-        #expect(abs(path.x(at: 5) - 0.7) < 0.01)       // B speaks: an instant cut, no pan
+        #expect(abs(path.x(at: 5) - 0.7) < 0.01)       // B speaks: a cut, no pan
+        #expect(path.keys.map(\.dips) == [false, true])  // the move to B dips; the clip's start doesn't
     }
 
     @Test func jumpsWithACutInTheSource() {
         let (faces, p) = panel()
         let path = ColumnPath(segments: [(8, 13)], timeline: SpeechTimeline(p), labels: FaceLabels(faces: faces, project: p),
                               aspect: aspect)
+        #expect(path.keys.allSatisfy { !$0.dips })      // the source's cut is a hard cut
         #expect(abs(path.x(at: 9) - 0.7) < 0.01)       // B, right
         #expect(abs(path.x(at: 10.05) - 0.7) < 0.01)   // A now sits on the right: the column stays
         #expect(abs(path.x(at: 12) - 0.7) < 0.01)

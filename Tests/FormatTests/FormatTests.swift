@@ -164,6 +164,19 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         #expect(p.words[word(p, "fiscal-year-2027")].start == original.words[word(original, "FY27")].start)
     }
 
+    @Test func autoLevelsRoundTripOnTheClipMarker() throws {
+        let text = handWritten.replacingOccurrences(of: "{clip \"Hiring plan\"}", with: "{clip \"Hiring plan\" levels}")
+            .replacingOccurrences(of: "{clip \"Welcome\" -200ms}", with: "{clip \"Welcome\" -200ms levels}")
+        let r = parse(text)
+        #expect(r.issues.isEmpty)
+        #expect(r.project.clips.map(\.autoLevels) == [true, false, true])
+        let out = TranscriptWriter.write(r.project)
+        #expect(out.contains("{clip \"Welcome\" -200ms levels}") && out.contains("{clip \"Hiring plan\" levels}[^hiring-plan]"))
+        #expect(!out.contains("FY27\" -120ms levels"))
+        let bad = parse("[00:00:01.0]\nHi {clip \"X\" sideways} there {/clip}\n")
+        #expect(bad.issues.contains { $0.severity == .error })
+    }
+
     @Test func movedMarkerMovesTheBoundary() {
         let edited = handWritten.replacingOccurrences(of: "Welcome everyone. {clip \"Welcome\" -200ms} Thanks",
                                                       with: "{clip \"Welcome\" -200ms} Welcome everyone. Thanks")

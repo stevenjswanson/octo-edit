@@ -38,6 +38,7 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | Syntax | Meaning |
 |---|---|
 | `{clip "Name"}` … `{/clip}` | A clip. The name is optional; the output file is the name's slug (`budget-update`), or `clip-NN` when unnamed. |
+| `{clip "Name" levels}` | The clip with auto-levels: brightness, contrast and colour evened out as Photos' auto-enhance does, measured once over the clip and applied to every frame. In the app: the clip's **Auto levels** checkbox. |
 | `{clip … -120ms}`, `{/clip +250ms}` | Start 120 ms before the first word; end 250 ms after the last. Without an offset, the `pre`/`post` defaults apply. |
 | `~~words~~` | Omitted from the clip (a hard cut with a short audio crossfade). Omitted text that continues into the next paragraph is fenced again there; the pieces merge. |
 | `~~{+40ms} …` / `… {-60ms}~~` | Adjust the cut at an omission: `{+40ms}` just inside the opening `~~` keeps 40 ms after the word before it; `{-60ms}` just inside the closing `~~` resumes 60 ms before the word after it. Default 0 (word edges are already tightened to the speech). |
@@ -45,7 +46,7 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | `> (00:00:02.1) **Speaker:**` | Zoom-only text (said before or after the recording); can't contain markers. |
 | `[00:23:46.3] **Speaker:**` | Starts a paragraph. Each paragraph has one speaker; to change who said some words, split the paragraph and give the new part its own header. |
 | `speakers: [Mia Minnes, Kathy]` (front matter) | The roster of speaker names. Header names missing from it are added on load; the tool writes it in order of first appearance, with unused names last. |
-| `defaults: { …, framing: "9:16" }` (front matter) | Output shape: `source` (default, as the video came in) or `"9:16"` (a full-height column centred on whoever is speaking, cutting to the new speaker when the speaker changes; needs `octoedit faces`). Exports are named `SLUG-4k-9x16.*`. |
+| `defaults: { …, framing: "9:16" }` (front matter) | Output shape: `source` (default, as the video came in) or `"9:16"` (a full-height column centred on whoever is speaking, moving to the new speaker with a quick dip through black when the speaker changes (a hard cut where the source itself cuts); needs `octoedit faces`). Exports are named `SLUG-4k-9x16.*`. |
 
 Edit the words freely: timing is re-attached on every load by aligning the text with
 `words.tsv`, so fixing a misheard word keeps its timing and deleting one shifts nothing.

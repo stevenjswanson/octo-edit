@@ -71,10 +71,11 @@ public enum Grammar {
 
     // MARK: Markers
 
-    public static func clipOpen(name: String?, offset: Seconds?) -> String {
+    public static func clipOpen(name: String?, offset: Seconds?, levels: Bool = false) -> String {
         var s = "{clip"
         if let name { s += " \"" + name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
         if let offset { s += " " + Self.offset(offset) }
+        if levels { s += " levels" }
         return s + "}"
     }
 
@@ -90,7 +91,7 @@ public enum Grammar {
 /// Body-text tokens of transcript.md.
 public enum Token: Equatable, Sendable {
     case word(String)
-    case clipOpen(name: String?, offset: Seconds?)
+    case clipOpen(name: String?, offset: Seconds?, levels: Bool)
     case clipClose(offset: Seconds?)
     case fence
     case offset(Seconds)
@@ -186,8 +187,12 @@ public enum Lexer {
                 name = value
                 rest = rest[rest.index(after: k)...].drop { $0 == " " }
             }
-            if rest.isEmpty { return .clipOpen(name: name, offset: nil) }
-            if let o = Grammar.parseMilliseconds(rest) { return .clipOpen(name: name, offset: o) }
+            // Then an optional offset and an optional `levels`, in that order.
+            var parts = rest.split(separator: " ")
+            let levels = parts.last == "levels"
+            if levels { parts.removeLast() }
+            if parts.isEmpty { return .clipOpen(name: name, offset: nil, levels: levels) }
+            if parts.count == 1, let o = Grammar.parseMilliseconds(parts[0]) { return .clipOpen(name: name, offset: o, levels: levels) }
             return .invalid("{\(body)}")
         }
         if let o = Grammar.parseMilliseconds(text), text.first == "+" || text.first == "-" {

@@ -115,6 +115,9 @@ struct VideoPane: View {
                     }
                     .opacity(showingSource ? 0 : 1)
                     .allowsHitTesting(!showingSource)
+                    if settings.showFaces {
+                        FaceOverlay(model: model, preview: preview)
+                    }
                     if preview.building && !showingSource {
                         ProgressView().controlSize(.small).padding(8)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

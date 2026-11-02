@@ -46,6 +46,10 @@ struct ClipInfoPanel: View {
                  + (model.preview.clipID == clipID && model.preview.duration > 0 ? " · " + ClipShelf.duration(model.preview.duration) : ""))
                 .font(.caption).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle)
+            Toggle("Auto levels", isOn: Binding(get: { clip?.autoLevels ?? false },
+                                                set: { model.setAutoLevels(clipID, $0) }))
+                .toggleStyle(.checkbox).controlSize(.small)
+                .help("Even out this clip's brightness, contrast and colour, as Photos' auto-enhance does. The preview shows it; exports include it.")
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $notes)
                     .font(.callout)

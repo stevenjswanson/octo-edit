@@ -57,6 +57,7 @@ struct Reader {
     // Clip state
     struct PendingClip {
         var name: String?
+        var levels = false
         var openOffset: Seconds?
         var closeOffset: Seconds?
         var first: Int
@@ -199,13 +200,13 @@ struct Reader {
                     openFence!.last = i
                 }
                 if openClip != nil { openClip!.last = i }
-            case .clipOpen(let name, let offset):
+            case .clipOpen(let name, let offset, let levels):
                 if let c = openClip {
                     error("clip opened inside another clip (opened on line \(c.line))", line)
                 } else if openFence != nil {
                     error("clip opened inside omitted text", line)
                 } else {
-                    openClip = PendingClip(name: name.flatMap { $0.isEmpty ? nil : $0 }, openOffset: offset,
+                    openClip = PendingClip(name: name.flatMap { $0.isEmpty ? nil : $0 }, levels: levels, openOffset: offset,
                                            first: words.count, line: line)
                 }
             case .clipClose(let offset):
@@ -292,7 +293,7 @@ struct Reader {
                 error("clip has no kept words", c.line)
                 continue
             }
-            project.clips.append(Clip(id: ClipID(n + 1), name: c.name, segments: segments))
+            project.clips.append(Clip(id: ClipID(n + 1), name: c.name, segments: segments, autoLevels: c.levels))
         }
         // Omitted runs outside the clips. A run never straddles a clip edge: clips
         // start and end on kept words.

@@ -49,6 +49,16 @@ func samples(_ url: URL) async throws -> [Float] {
         SourceInfo(duration: 10, frameRate: 29.97, width: w, height: h, codec: c, hasAudio: true)
     }
 
+    @Test func autoLevelsAverageEachFramesSuggestions() {
+        typealias F = AutoLevels.Filter
+        let curve = { (y: Double) in F(name: "CIToneCurve", numbers: [:], vectors: ["inputPoint3": [0.4, y]]) }
+        let shadow = F(name: "CIHighlightShadowAdjust", numbers: ["inputShadowAmount": 0.3], vectors: [:])
+        let l = AutoLevels(frames: [[curve(0.5)], [curve(0.6), shadow], [curve(0.7)]])
+        // The curve, averaged; the shadow lift, suggested once in three, left out.
+        #expect(l.filters.map(\.name) == ["CIToneCurve"])
+        #expect(abs(l.filters[0].vectors["inputPoint3"]![1] - 0.6) < 1e-9)
+    }
+
     @Test func exactSizesUseSizedPresetsOthersKeepSourceSize() {
         #expect(ClipExporter.preset(for: info(3840, 2160), quality: .full(.hevc)) == AVAssetExportPresetHEVC3840x2160)
         #expect(ClipExporter.preset(for: info(1920, 1080), quality: .full(.h264)) == AVAssetExportPreset1920x1080)

@@ -57,6 +57,16 @@ public struct Renderer {
                           aspect: Double(info.width) / Double(max(info.height, 1)))
     }
 
+    /// Each segment's auto-levels (nil where its clip has them off), measured per clip.
+    func levels(_ clips: [(clip: Clip, segments: [ResolvedSegment])]) async throws -> [AutoLevels?] {
+        var out: [AutoLevels?] = []
+        for (clip, segments) in clips {
+            let l = clip.autoLevels ? try await AutoLevels.measure(AVURLAsset(url: source), segments: segments) : nil
+            out += Array(repeating: l, count: segments.count)
+        }
+        return out
+    }
+
     func outputHeight(_ options: Options) -> Int? {
         options.preview || options.resolution == .hd720 ? 1280 : nil
     }
@@ -111,7 +121,8 @@ public struct Renderer {
         guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
         let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
                                                        crossfade: project.settings.crossfade,
-                                                       column: column(segments, options), outputHeight: outputHeight(options))
+                                                       column: column(segments, options), levels: levels([(clip, segments)]),
+                                                       outputHeight: outputHeight(options))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(baseName(slug, options) + ".mp4")
         let quality = quality(options)
@@ -160,7 +171,9 @@ public struct Renderer {
         guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
         let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
                                                        crossfade: project.settings.crossfade,
-                                                       column: column(segments, options), outputHeight: outputHeight(options))
+                                                       column: column(segments, options),
+                                                       levels: levels(Array(zip(clips, perClip))),
+                                                       outputHeight: outputHeight(options))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(baseName(slug, options) + ".mp4")
         let quality = quality(options)
