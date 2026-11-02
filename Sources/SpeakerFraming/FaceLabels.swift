@@ -136,7 +136,7 @@ public struct FaceLabels: Sendable {
     /// tracks at the same place and size in any shot are one person. A seat takes the
     /// speaker it won most often, if it won at least a second's worth and at least half
     /// the frames it was on screen while that speaker talked; in one shot, two seats
-    /// can't both be the same speaker (the stronger keeps it).
+    /// can't both be the same speaker (the one with more votes keeps it).
     static func label(_ tracks: [Track], frames: [FaceFrame], voices: SpeechTimeline) -> [Track] {
         var tracks = tracks
         let dt = frames.count > 1 ? max((frames.last!.t - frames.first!.t) / Double(frames.count - 1), 0.01) : 0.1
@@ -170,22 +170,27 @@ public struct FaceLabels: Sendable {
             for (n, c) in heard[id] ?? [:] { seatHeard[seatOf[id], default: [:]][n, default: 0] += c }
         }
         let minimum = Int((1.0 / dt).rounded())
+        // Frames each track's seat won for its speaker: how much evidence there is.
+        var votes = [Int](repeating: 0, count: tracks.count)
         for id in tracks.indices {
             let seat = seatOf[id]
             guard let (name, count) = seatWon[seat]?.max(by: { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key })
             else { continue }
             let score = Double(count) / Double(max(seatHeard[seat]?[name] ?? 1, 1))
             tracks[id].score = score
+            votes[id] = count
             if count >= minimum, score >= 0.5 { tracks[id].speaker = name }
         }
         // One face per speaker per shot.
         let byShot = Dictionary(grouping: tracks.indices, by: { tracks[$0].shot })
         for (_, ids) in byShot {
             for (_, same) in Dictionary(grouping: ids.filter { tracks[$0].speaker != nil }, by: { tracks[$0].speaker! }) {
-                // Overlapping in time: keep the stronger; one person's track split in two is fine.
+                // Overlapping in time: keep the one with more evidence (a stray detection
+                // can win a few frames by a wide ratio); one person's track split in two is fine.
+                func strength(_ k: Int) -> (Int, Double, Int) { (votes[k], tracks[k].score, -k) }
                 for a in same {
                     for b in same where b != a && tracks[b].speaker != nil && overlap(tracks[a], tracks[b])
-                    && (tracks[b].score, -b) < (tracks[a].score, -a) {
+                    && strength(b) < strength(a) {
                         tracks[b].speaker = nil
                     }
                 }

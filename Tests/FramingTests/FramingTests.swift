@@ -130,11 +130,33 @@ func project(_ turns: [(start: Double, end: Double, speaker: String)]) -> Projec
 
     @Test func aBriefInterjectionDoesNotSwingTheColumn() {
         let (faces, base) = panel()
-        let p = project([(0, 2, "A"), (2, 2.4, "B"), (2.5, 5, "A"), (5, 10, "B")])
+        // B says a word over A, who carries straight on.
+        let p = project([(0, 2, "A"), (2, 2.2, "B"), (2.25, 5, "A"), (5, 10, "B")])
         let labels = FaceLabels(faces: faces, project: base)
         let path = ColumnPath(segments: [(0, 10)], timeline: SpeechTimeline(p), labels: labels, aspect: aspect)
         for t in stride(from: 0.0, through: 4.9, by: 0.1) { #expect(abs(path.x(at: t) - 0.2) < 0.01) }
         #expect(abs(path.x(at: 7) - 0.7) < 0.01)
+    }
+
+    @Test func aQuickAnswerGetsItsShot() {
+        // A lightning round: B answers "Yes." and A goes on.
+        let (faces, base) = panel()
+        let p = project([(0, 2, "A"), (2, 2.4, "B"), (2.6, 5, "A"), (5, 10, "B")])
+        let labels = FaceLabels(faces: faces, project: base)
+        let path = ColumnPath(segments: [(0, 10)], timeline: SpeechTimeline(p), labels: labels, aspect: aspect)
+        #expect(abs(path.x(at: 1.9) - 0.2) < 0.01)
+        #expect(abs(path.x(at: 2.1) - 0.7) < 0.01)
+        #expect(abs(path.x(at: 3) - 0.2) < 0.01)
+    }
+
+    @Test func aSegmentStartingOnAShortAnswerOpensOnIt() {
+        // An omission ends right where B's one-word answer begins; A follows.
+        let (faces, base) = panel()
+        let p = project([(0, 2, "A"), (2, 3, "B"), (3, 5, "A"), (5, 10, "B")])
+        let labels = FaceLabels(faces: faces, project: base)
+        let path = ColumnPath(segments: [(2, 5)], timeline: SpeechTimeline(p), labels: labels, aspect: aspect)
+        #expect(abs(path.x(at: 2) - 0.7) < 0.01)
+        #expect(abs(path.x(at: 3.5) - 0.2) < 0.01)
     }
 
     @Test func aStartNudgedIntoThePreviousSpeakerOpensOnTheClipsSpeaker() {
