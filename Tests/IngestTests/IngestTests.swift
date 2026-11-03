@@ -258,6 +258,17 @@ func edgeError(_ words: [(start: Double, end: Double)], _ lines: [TruthLine]) ->
         #expect(p.validate().isEmpty)
     }
 
+    @Test func aLongUnvoicedStretchBetweenTurnsIsFine() async {
+        // Twenty words; only the first two and the last two fall in a voice turn.
+        let pid = ParagraphID(1)
+        let words = (0..<20).map { Word(id: WordID($0 + 1), text: "w\($0)", start: Double($0), end: Double($0) + 0.8, paragraph: pid) }
+        var p = Project(source: "v.mp4", paragraphs: [Paragraph(id: pid, speaker: "Room")], words: words)
+        let turns = [VoiceTurn(start: 0, end: 1.9, voice: "S1"), VoiceTurn(start: 18, end: 19.9, voice: "S2")]
+        let r = await SpeakerID.identify(&p, turns: turns, namer: FixedNamer(result: [:]))
+        #expect(r.names == ["S1": "Speaker 1", "S2": "Speaker 2"])
+        #expect(SpeakerID.samples(p, p.voices(from: turns))[0].turns[0].after == "w3 w4 w5 w6 w7 w8 w9 w10")
+    }
+
     @Test func zoomNamesWinWhenZoomCreditsSeveralPeople() async {
         var p = project()
         p.zoom = ZoomInfo(file: "z.vtt", offset: 10)

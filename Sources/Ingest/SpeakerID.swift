@@ -85,7 +85,7 @@ public enum SpeakerID {
         var bySpeaker: [String: VoiceSample] = [:]
         for (k, run) in runs.enumerated() {
             let before = k > 0 ? text(max(runs[k - 1].words.lowerBound, run.words.lowerBound - 15)..<run.words.lowerBound) : ""
-            let after = k + 1 < runs.count ? text(runs[k + 1].words.lowerBound..<min(runs[k + 1].words.upperBound, run.words.upperBound + 8)) : ""
+            let after = k + 1 < runs.count ? text(run.words.upperBound..<min(runs[k + 1].words.upperBound, run.words.upperBound + 8)) : ""
             let seconds = p.words[run.words].reduce(0.0) { $0 + (($1.end ?? 0) - ($1.start ?? 0)) }
             if bySpeaker[run.voice] == nil {
                 order.append(run.voice)
