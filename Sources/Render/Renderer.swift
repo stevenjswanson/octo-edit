@@ -167,6 +167,9 @@ public struct Renderer {
             try vtt!.write(to: directory.appendingPathComponent(baseName(name, options) + ".vtt"), atomically: true, encoding: .utf8)
             try ExportNotes.clip(clip, in: project)
                 .write(to: directory.appendingPathComponent(baseName(name, options) + ".md"), atomically: true, encoding: .utf8)
+            if let stamp = ExportStamp.fingerprint(of: clip, in: project, sourceIdentity: ExportStamp.sourceIdentity(source)) {
+                try ExportStamp.write(stamp, in: directory)
+            }
         }
         let duration = built.sourceRanges.reduce(0) { $0 + $1.duration }
         return Rendered(slug: slug, name: clip.name, file: file, duration: duration, clips: [clip.id],

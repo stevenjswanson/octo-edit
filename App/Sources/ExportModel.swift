@@ -54,6 +54,8 @@ final class ExportModel {
     private(set) var sourceSummary = ""
 
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// Called when an export run ends (done, failed or cancelled), to recheck what's stale.
+    @ObservationIgnored var onFinish: () -> Void = {}
     /// The package being exported, for remembering its export folder.
     @ObservationIgnored private var package: URL?
     @ObservationIgnored let queue: any ExportQueue = PassThroughExportQueue()
@@ -191,43 +193,65 @@ final class ExportModel {
                 phase = .failed(String(describing: error))
             }
             task = nil
+            onFinish()
         }
     }
 
-    /// Shelf ▸ Re-export: one clip, straight away, with the options as they are now
-    /// (resolution, framing, codec) into the folder the last export went to. No choices,
-    /// no Finder window; `phase` and `overall` drive a progress sheet.
-    func reexport(_ id: ClipID, project: Project, source: URL, package: URL?, faces: FaceTracks?) {
-        guard !isExporting, let clip = project.clip(id) else { return }
-        let dest = destination ?? Self.lastFolder(package: package)
-        guard let dest else { return }
+    /// Shelf ▸ Re-export (one clip) and Re-export Changed (every stale clip): straight
+    /// away, with the options as they are now (resolution, framing, codec), into the
+    /// folder the last export went to. No choices, no Finder window; `phase` and
+    /// `overall` drive a progress sheet.
+    func reexport(_ ids: [ClipID], project: Project, source: URL, package: URL?, faces: FaceTracks?) {
+        let clips = project.clips.filter { ids.contains($0.id) }
+        guard !isExporting, !clips.isEmpty, let dest = destination ?? Self.lastFolder(package: package) else { return }
         destination = dest
         self.package = package
         codec = project.settings.codec
         overall = 0
-        currentRow = id
-        currentLabel = "Exporting \(clip.name ?? project.slug(of: id) ?? "clip")"
         phase = .exporting
         let options = Renderer.Options(codec: codec, resolution: resolution)
         let queue = queue
+        let seconds = clips.map { project.duration(of: $0) }
+        let total = max(seconds.reduce(0, +), 0.001)
         task = Task {
+            var exported = 0
+            var failures: [String] = []
             do {
                 let renderer = try await Renderer(project: project, source: source, faces: faces)
-                let r = try await queue.run {
-                    try await renderer.render(clip, into: dest, options: options) { f in
-                        Task { @MainActor [weak self] in self?.overall = f }
+                var finished = 0.0
+                for (n, clip) in clips.enumerated() {
+                    try Task.checkCancellation()
+                    let title = clip.name ?? project.slug(of: clip.id) ?? "clip"
+                    currentRow = clip.id
+                    currentLabel = clips.count == 1 ? "Exporting \(title)" : "Exporting \(n + 1) of \(clips.count): \(title)"
+                    let base = finished, weight = seconds[n]
+                    do {
+                        _ = try await queue.run {
+                            try await renderer.render(clip, into: dest, options: options) { f in
+                                Task { @MainActor [weak self] in self?.overall = (base + f * weight) / total }
+                            }
+                        }
+                        exported += 1
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        failures.append("\(title): \(error)")
                     }
+                    finished += weight
+                    overall = finished / total
                 }
-                overall = 1
-                phase = .finished("Exported \(r.file.lastPathComponent).")
+                phase = failures.isEmpty
+                    ? .finished("Exported \(exported) clip\(exported == 1 ? "" : "s").")
+                    : .failed("\(failures.count) of \(clips.count) failed. " + failures.joined(separator: "; "))
             } catch is CancellationError {
-                phase = .finished("Cancelled; nothing partial was left behind.")
+                phase = .finished("Cancelled after \(exported) clip\(exported == 1 ? "" : "s"); nothing partial was left behind.")
             } catch {
                 phase = .failed(String(describing: error))
             }
             currentRow = nil
             currentLabel = ""
             task = nil
+            onFinish()
         }
     }
 

@@ -185,6 +185,32 @@ func samples(_ url: URL) async throws -> [Float] {
         }
     }
 
+    /// An export leaves a stamp; editing the clip or swapping the video makes it stale,
+    /// and renaming it leaves nothing exported under the new name.
+    @Test(.enabled(if: haveSine)) func exportStampTracksChanges() async throws {
+        let src = fixture("sine-1080.mp4")
+        var p = secondsProject(source: src.path)
+        let c = try p.makeClip(words: 1...4)
+        let other = try p.makeClip(words: 6...7)
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let r = try await Renderer(project: p, source: src)
+        _ = try await r.render(p.clip(c)!, into: dir, options: .init(resolution: .hd720))
+        let id = ExportStamp.sourceIdentity(src)
+        #expect(ExportStamp.states(p, exports: dir, sourceIdentity: id) == [c: .current, other: .notExported])
+        #expect(ExportStamp.states(p, exports: dir, sourceIdentity: "another.mp4 1")[c] == .changed)
+
+        var edited = p
+        try edited.omit(words: 2...2, in: c)
+        #expect(ExportStamp.states(edited, exports: dir, sourceIdentity: id)[c] == .changed)
+        var noted = p
+        noted.clips[0].notes = "new notes"
+        #expect(ExportStamp.states(noted, exports: dir, sourceIdentity: id)[c] == .changed)
+        var renamed = p
+        renamed.clips[0].name = "Renamed"
+        #expect(ExportStamp.states(renamed, exports: dir, sourceIdentity: id)[c] == .notExported)
+    }
+
     /// Two clips joined: duration is the sum, captions keep both clips' words and no
     /// cue straddles the join; the slug avoids clip slugs.
     @Test(.enabled(if: haveSine)) func supercutJoinsClipsInOrder() async throws {

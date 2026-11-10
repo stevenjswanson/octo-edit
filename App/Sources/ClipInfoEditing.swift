@@ -92,9 +92,14 @@ extension DocumentModel {
     }
 
     /// Shelf ▸ Re-export: export this clip again, as last time, with only a progress sheet.
-    func reexportClip(_ id: ClipID) {
-        guard let source = sourceURL, !loadErrors, !sourceMissing else { return }
-        exporter.reexport(id, project: project, source: source, package: packageURL, faces: faces)
+    func reexportClip(_ id: ClipID) { reexport([id]) }
+
+    /// Shelf ▸ Re-export Changed: every clip whose export is out of date, in order.
+    func reexportChanged() { reexport(project.clips.map(\.id).filter { needsExport[$0] != nil }) }
+
+    private func reexport(_ ids: [ClipID]) {
+        guard let source = sourceURL, !loadErrors, !sourceMissing, !ids.isEmpty else { return }
+        exporter.reexport(ids, project: project, source: source, package: packageURL, faces: faces)
         if exporter.isExporting { reexporting = true }
     }
 }

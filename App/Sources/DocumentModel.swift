@@ -5,6 +5,7 @@ import Core
 import Load
 import Align
 import SpeakerFraming
+import Render
 import os
 
 /// Play, pause, seek and pane decisions, for diagnosing playback (`log stream --predicate 'subsystem == "edu.ucsd.OctoEdit"'`).
@@ -111,7 +112,13 @@ final class DocumentModel {
     /// struck-out word still counts as on it).
     @ObservationIgnored var wordBeforeCaret: Int?
     /// The package on disk (set by the document), for writing the waveform cache.
-    @ObservationIgnored var packageURL: URL?
+    @ObservationIgnored var packageURL: URL? {
+        didSet { if packageURL != oldValue { refreshExportStates() } }
+    }
+    /// Clips whose export is out of date: changed since they were exported (or, once
+    /// anything has been exported, never exported under their current name), with why.
+    /// Checked against the stamps in the export folder whenever the project changes.
+    private(set) var needsExport: [ClipID: String] = [:]
 
     @ObservationIgnored let player = AVPlayer()
     @ObservationIgnored let preview = PreviewModel()
@@ -152,6 +159,7 @@ final class DocumentModel {
             self?.playheadMoved(t)
         }
         preview.faceLabels = { [weak self] in self?.faceLabels }
+        exporter.onFinish = { [weak self] in self?.refreshExportStates() }
         preview.onPlay = { [weak self] in
             self?.player.pause()
             self?.activePane = .preview
@@ -188,6 +196,7 @@ final class DocumentModel {
         project.source = url.path
         attachSource(url)
         refreshPreview()
+        refreshExportStates()
     }
 
     private func attachSource(_ url: URL) {
@@ -220,6 +229,27 @@ final class DocumentModel {
         if let b = inspected, p.role(of: b) == nil { inspected = nil }
         if let s = selection, s.upperBound >= p.words.count { selection = nil }
         refreshPreview()
+        refreshExportStates()
+    }
+
+    /// Compares each clip with its export's stamp (see `ExportStamp`).
+    func refreshExportStates() {
+        guard let source = sourceURL, let folder = exporter.destination ?? ExportModel.lastFolder(package: packageURL) else {
+            if !needsExport.isEmpty { needsExport = [:] }
+            return
+        }
+        let states = ExportStamp.states(project, exports: folder, sourceIdentity: ExportStamp.sourceIdentity(source))
+        let anyExported = states.values.contains { $0 != .notExported }
+        var out: [ClipID: String] = [:]
+        for (id, state) in states {
+            switch state {
+            case .current: break
+            case .changed: out[id] = "Changed since it was exported"
+            case .notExported where anyExported: out[id] = "Not exported under this name yet"
+            case .notExported: break
+            }
+        }
+        if out != needsExport { needsExport = out }
     }
 
     // MARK: Editing

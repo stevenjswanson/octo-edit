@@ -52,7 +52,15 @@ struct ClipShelf: View {
                                      : "Only consecutive clips can be merged")
                 .padding(.leading, 12)
             }
-            Button { model.showExport() } label: {
+            let stale = model.needsExport.count
+            Button { model.reexportChanged() } label: {
+                Label(stale > 0 ? "Re-export \(stale) Changed" : "Re-export Changed", systemImage: "arrow.clockwise")
+            }
+            .disabled(stale == 0 || model.loadErrors || model.sourceMissing || model.exporter.isExporting)
+            .help(stale > 0 ? "Export again every clip marked as changed since its export, with the current settings"
+                            : "No clip has changed since it was exported")
+            .padding(.leading, 12)
+                        Button { model.showExport() } label: {
                 Label("Export…", systemImage: "square.and.arrow.up")
             }
             .disabled(project.clips.isEmpty || model.loadErrors || model.sourceMissing)
@@ -87,6 +95,18 @@ struct ClipShelf: View {
                         .overlay(Circle().stroke(.white, lineWidth: 1.5))
                         .padding(4)
                         .help(why + ". Play the clip to clear this mark.")
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                // Opposite corner from the orange review dot, so both can show at once.
+                if let why = model.needsExport[clip.id] {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 15, height: 15)
+                        .background(Circle().fill(Color.accentColor))
+                        .overlay(Circle().stroke(.white, lineWidth: 1.5))
+                        .padding(3)
+                        .help(why + ". Re-export it (right-click, or Re-export Changed) to bring the files up to date.")
                 }
             }
             Text("\(n + 1)  \(clip.name ?? "Unnamed")").font(.caption.weight(.medium)).lineLimit(1)
