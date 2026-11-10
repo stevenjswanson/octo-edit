@@ -20,7 +20,7 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | `init --video V [--zoom Z] [--speakers "A, B"] [--pre 120ms --post 180ms --crossfade 20ms] [--codec hevc\|h264] PKG` | Transcribes V on this Mac (English, first audio track), tightens word edges against the audio, takes speakers and text from the Zoom `.vtt`, and writes an un-annotated `transcript.md`. `--speakers` sets the roster and also finds who speaks when (as `speakers` below). |
 | `faces PKG` | Finds faces through the video into `cache/faces.tsv` (about ⅓ of the video's length for 4K), for 9:16 framing. `init` and `speakers` take `--faces` to do this too. |
 | `speakers PKG [--speakers "A, B"] [--faces]` | Finds who speaks when from the voices: every voice change starts a paragraph, and voices are named from the roster (or Speaker 1, 2, …). Resets every speaker name; markers stay on their words. Lists turns under a second to check. |
-| `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--framing source\|9:16] [--dest DIR]` | Exports each clip as `SLUG.mp4` (input resolution and frame rate, hardware-encoded) plus `SLUG.vtt` captions and a `notes.md`. `--check` only validates; `--preview` makes fast 720p `SLUG.preview.mp4` files in `exports/preview/`. |
+| `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--framing source\|9:16] [--dest DIR]` | Exports each clip into its own folder `exports/SLUG/`: `SLUG.mp4` (input resolution and frame rate, hardware-encoded) plus `SLUG.vtt` captions, `SLUG.timeline.json` (who speaks when and where the cuts are, on the clip's own clock) and a `notes.md`. `--check` only validates; `--preview` makes fast 720p `SLUG.preview.mp4` files in `exports/preview/`. |
 | `name PKG [--clip SLUG]… [--apply [--all]]` | Suggests titles with Apple's on-device model into the front matter. `--apply` names unnamed clips; `--all` renames every clip. |
 
 ## Marking up `transcript.md`
@@ -63,10 +63,26 @@ meeting.octoedit/
   words.tsv       timed words from ingest; never rewritten
   *.vtt           the original Zoom transcript
   cache/          regenerable (waveform.bin, faces.tsv: face boxes, no fingerprints)
-  exports/        rendered clips
+  exports/        rendered clips, one folder per clip (SLUG/); previews in preview/
 ```
 
 The input video is referenced, never copied (relative path when it sits beside the package).
+
+## Timeline sidecar
+
+Each export (clip or supercut) gets `<name>.timeline.json` beside its `.mp4` in the clip's folder, so other tools
+can see who speaks when and where the cuts are without parsing `transcript.md`. All times
+are seconds on the exported file's own clock, from the frame-snapped ranges the encoder used.
+
+| key | contents |
+|---|---|
+| `source`, `duration`, `speakers` | input video path, file length, speakers in order of appearance |
+| `clips` | `{slug, title, start, end}` per clip in the file (several for a supercut) |
+| `segments` | `{clip, start, end, sourceStart, sourceEnd}` per kept run; every boundary between two segments is a cut |
+| `turns` | `{speaker, start, end, text}`: consecutive kept words by one speaker (may span a cut; a new turn at each speaker or clip change) |
+| `words` | `{start, end, speaker, segment, text}` per kept, timed word |
+
+Arrays are written one element per line. `octoedit render --help` documents the same format. Words typed by hand (untimed) are left out, as in the captions.
 
 ## Development
 

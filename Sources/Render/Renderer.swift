@@ -86,14 +86,18 @@ public struct Renderer {
         public var clips: [ClipID] = []
         /// The captions written beside it (nil for previews).
         public var captions: String?
+        /// The speaker-and-cut timeline written beside it (nil for previews).
+        public var timeline: Timeline?
 
-        public init(slug: String, name: String?, file: URL, duration: Seconds, clips: [ClipID] = [], captions: String? = nil) {
+        public init(slug: String, name: String?, file: URL, duration: Seconds, clips: [ClipID] = [],
+                    captions: String? = nil, timeline: Timeline? = nil) {
             self.slug = slug
             self.name = name
             self.file = file
             self.duration = duration
             self.clips = clips
             self.captions = captions
+            self.timeline = timeline
         }
     }
 
@@ -111,12 +115,35 @@ public struct Renderer {
         self.info = try await SourceInfo.read(source)
     }
 
-    /// Renders one clip to `<directory>/<slug>-4k.mp4` plus `<slug>-4k.vtt` captions and
+    /// Where an export's files go: `<exports>/<slug>/` (every resolution and shape of a
+    /// clip together), or for previews, which have no sidecars, `<exports>` itself.
+    public func folder(_ exports: URL, slug: String, _ options: Options) -> URL {
+        options.preview ? exports : exports.appendingPathComponent(slug, isDirectory: true)
+    }
+
+    /// Runs `body`; if it throws (or is cancelled), removes `directory` when it is left
+    /// empty, so a failed export leaves no empty clip folder behind.
+    func cleaningUp<T>(_ directory: URL, _ body: () async throws -> T) async throws -> T {
+        do { return try await body() } catch {
+            let fm = FileManager.default
+            if (try? fm.contentsOfDirectory(atPath: directory.path))?.isEmpty == true { try? fm.removeItem(at: directory) }
+            throw error
+        }
+    }
+
+    /// Writes `<base>.timeline.json`.
+    func write(_ timeline: Timeline, base: String, in directory: URL) throws {
+        try timeline.json().write(to: directory.appendingPathComponent(base + ".timeline.json"), atomically: true, encoding: .utf8)
+    }
+
+    /// Renders one clip to `<exports>/<slug>/<slug>-4k.mp4` plus `<slug>-4k.vtt` captions,
+    /// `<slug>-4k.timeline.json` (speakers and cuts on the clip's clock) and
     /// `<slug>-4k.md` notes (the label follows the output resolution), or for previews
-    /// just `<slug>.preview.mp4`.
-    public func render(_ clip: Clip, into directory: URL, options: Options,
+    /// just `<exports>/<slug>.preview.mp4`.
+    public func render(_ clip: Clip, into exports: URL, options: Options,
                        progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Rendered {
         let slug = project.slug(of: clip.id)!
+        let directory = folder(exports, slug: slug, options)
         let segments = project.resolvedSegments(of: clip, sourceDuration: info.duration)
         guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
         let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
@@ -126,46 +153,60 @@ public struct Renderer {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(baseName(slug, options) + ".mp4")
         let quality = quality(options)
-        try await ClipExporter.export(built, info: info, quality: quality, to: file, progress: progress)
+        try await cleaningUp(directory) {
+            try await ClipExporter.export(built, info: info, quality: quality, to: file, progress: progress)
+        }
         var vtt: String?
+        var timeline: Timeline?
         if !options.preview {
             vtt = Captions.webVTT(for: clip, in: project, sourceRanges: built.sourceRanges, clipStarts: built.segmentStarts)
+            timeline = Timeline.clip(clip, in: project, sourceRanges: built.sourceRanges, clipStarts: built.segmentStarts)
+            try write(timeline!, base: baseName(slug, options), in: directory)
             try vtt!.write(to: directory.appendingPathComponent(baseName(slug, options) + ".vtt"), atomically: true, encoding: .utf8)
             try ExportNotes.clip(clip, in: project)
                 .write(to: directory.appendingPathComponent(baseName(slug, options) + ".md"), atomically: true, encoding: .utf8)
         }
         let duration = built.sourceRanges.reduce(0) { $0 + $1.duration }
-        return Rendered(slug: slug, name: clip.name, file: file, duration: duration, clips: [clip.id], captions: vtt)
+        return Rendered(slug: slug, name: clip.name, file: file, duration: duration, clips: [clip.id],
+                        captions: vtt, timeline: timeline)
     }
 
     /// A supercut made by joining clips already exported with the same options — no
     /// re-encoding, so it takes seconds. Captions are the clips' own, shifted into
     /// place; chapters come from the files' real lengths. Joins are hard cuts (clip
     /// edges sit in their padding, so they're normally silent).
-    public func joinSupercut(_ parts: [Rendered], slug: String, into directory: URL, options: Options,
+    public func joinSupercut(_ parts: [Rendered], slug: String, into exports: URL, options: Options,
                              progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Rendered {
         guard !parts.isEmpty else { throw RenderError.emptyClip(slug) }
+        let directory = folder(exports, slug: slug, options)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(baseName(slug, options) + ".mp4")
-        let starts = try await ClipExporter.join(parts.map(\.file), to: file, progress: progress)
+        let starts = try await cleaningUp(directory) {
+            try await ClipExporter.join(parts.map(\.file), to: file, progress: progress)
+        }
         let duration = try await AVURLAsset(url: file).load(.duration).seconds
         let clips = parts.flatMap(\.clips).compactMap { project.clip($0) }
         var vtt: String?
+        var timeline: Timeline?
         if !options.preview {
             vtt = Captions.concatenate(zip(parts, starts).map { ($0.captions ?? "WEBVTT\n", $1) })
+            timeline = Timeline.concatenate(zip(parts, starts).compactMap { p, s in p.timeline.map { ($0, s) } }, duration: duration)
+            if let timeline { try write(timeline, base: baseName(slug, options), in: directory) }
             try vtt!.write(to: directory.appendingPathComponent(baseName(slug, options) + ".vtt"), atomically: true, encoding: .utf8)
             try ExportNotes.supercut(clips, starts: starts, in: project)
                 .write(to: directory.appendingPathComponent(baseName(slug, options) + ".md"), atomically: true, encoding: .utf8)
         }
         return Rendered(slug: slug, name: "Supercut (\(clips.count) clips)", file: file, duration: duration,
-                        clips: clips.map(\.id), captions: vtt)
+                        clips: clips.map(\.id), captions: vtt, timeline: timeline)
     }
 
     /// The clips joined end to end, in the order given, encoded as one file from the
-    /// source (`<slug>-4k.mp4` with `.vtt` and `.md`, or `<slug>.preview.mp4`). Used when
+    /// source (`<slug>/<slug>-4k.mp4` with its sidecars, or `<slug>.preview.mp4`). Used when
     /// the clips weren't exported in the same run; otherwise `joinSupercut` is far faster.
     /// Joins between clips get the same audio crossfade as omissions.
-    public func renderSupercut(_ clips: [Clip], slug: String, into directory: URL, options: Options,
+    public func renderSupercut(_ clips: [Clip], slug: String, into exports: URL, options: Options,
                                progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Rendered {
+        let directory = folder(exports, slug: slug, options)
         let perClip = clips.map { project.resolvedSegments(of: $0, sourceDuration: info.duration) }
         let segments = perClip.flatMap { $0 }
         guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
@@ -177,11 +218,17 @@ public struct Renderer {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(baseName(slug, options) + ".mp4")
         let quality = quality(options)
-        try await ClipExporter.export(built, info: info, quality: quality, to: file, progress: progress)
+        try await cleaningUp(directory) {
+            try await ClipExporter.export(built, info: info, quality: quality, to: file, progress: progress)
+        }
         var vtt: String?
+        var timeline: Timeline?
         if !options.preview {
             vtt = Captions.webVTT(supercut: clips, in: project, segmentCounts: perClip.map(\.count),
                                   sourceRanges: built.sourceRanges, clipStarts: built.segmentStarts)
+            timeline = Timeline.supercut(clips, in: project, segmentCounts: perClip.map(\.count),
+                                         sourceRanges: built.sourceRanges, clipStarts: built.segmentStarts)
+            try write(timeline!, base: baseName(slug, options), in: directory)
             try vtt!.write(to: directory.appendingPathComponent(baseName(slug, options) + ".vtt"), atomically: true, encoding: .utf8)
             // Each clip starts where its first segment landed.
             var starts: [Seconds] = [], k = 0
@@ -194,7 +241,7 @@ public struct Renderer {
         }
         let duration = built.sourceRanges.reduce(0) { $0 + $1.duration }
         return Rendered(slug: slug, name: "Supercut (\(clips.count) clips)", file: file, duration: duration,
-                        clips: clips.map(\.id), captions: vtt)
+                        clips: clips.map(\.id), captions: vtt, timeline: timeline)
     }
 
     /// `<base>-supercut`, made distinct from every clip's slug.

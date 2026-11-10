@@ -5,7 +5,7 @@ import Render
 
 /// The Export sheet's state. Exports the project as it is in the window (unsaved edits
 /// included) through Render — the same code as `octoedit render` — one clip at a time:
-/// `<slug>-4k.mp4` + `.vtt` captions + `.md` notes per clip; the supercut is joined from
+/// `<slug>/<slug>-4k.mp4` + `.vtt` captions + `.timeline.json` + `.md` notes, one folder per clip; the supercut is joined from
 /// those files (no second encode) and its `.md` carries YouTube chapters.
 @MainActor @Observable
 final class ExportModel {

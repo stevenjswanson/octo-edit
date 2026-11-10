@@ -83,6 +83,62 @@ func samples(_ url: URL) async throws -> [Float] {
     }
 }
 
+@Suite struct TimelineTests {
+    /// w0–w4 by A, w5–w9 by B; the clip keeps w1–w7 with w3–w4 cut out, so the
+    /// speaker changes right at the cut.
+    func twoSpeakers() throws -> (Project, Clip) {
+        var p = secondsProject(source: "x.mp4")
+        p.paragraphs.append(Paragraph(id: ParagraphID(2), speaker: "B"))
+        p.speakers = ["A", "B"]
+        for i in 5..<10 { p.words[i].paragraph = ParagraphID(2) }
+        let c = try p.makeClip(words: 1...7, name: "Talk")
+        try p.omit(words: 3...4, in: c)
+        return (p, p.clip(c)!)
+    }
+
+    @Test func turnsAndCutsOnTheClipsClock() throws {
+        let (p, clip) = try twoSpeakers()
+        let ranges = p.resolvedSegments(of: clip)
+        let starts = [0.0, ranges[0].duration]
+        let t = Timeline.clip(clip, in: p, sourceRanges: ranges, clipStarts: starts)
+        #expect(t.speakers == ["A", "B"])
+        #expect(t.clips.map(\.title) == ["Talk"])
+        #expect(t.segments.count == 2)
+        #expect(t.segments[1].start == t.segments[0].end)                 // the cut
+        #expect(t.segments[0].sourceStart == ranges[0].start)
+        // A before the cut, B from the first word after it.
+        #expect(t.turns.map(\.speaker) == ["A", "B"])
+        #expect(t.turns[0].text == "w1 w2")
+        #expect(t.turns[1].text == "w5 w6 w7")
+        #expect(t.words.map(\.segment) == [0, 0, 1, 1, 1])
+        let w5 = t.words.first { $0.text == "w5" }!
+        #expect(abs(w5.start - (starts[1] + 5 - ranges[1].start)) < 0.001)
+        #expect(t.turns[1].start == w5.start)
+        #expect(abs(t.duration - ranges.reduce(0) { $0 + $1.duration }) < 0.001)
+    }
+
+    @Test func concatenateShiftsTimesAndSegmentIndices() throws {
+        let (p, clip) = try twoSpeakers()
+        let ranges = p.resolvedSegments(of: clip)
+        let one = Timeline.clip(clip, in: p, sourceRanges: ranges, clipStarts: [0, ranges[0].duration])
+        let joined = Timeline.concatenate([(one, 0), (one, 10)], duration: 10 + one.duration)!
+        #expect(joined.segments.count == 4 && joined.clips.count == 2)
+        #expect(joined.clips[1].start == 10)
+        #expect(joined.words.last!.segment == 3)
+        #expect(joined.turns.count == 4)
+        #expect(joined.speakers == ["A", "B"])
+    }
+
+    @Test func jsonParsesAndHasOneWordPerLine() throws {
+        let (p, clip) = try twoSpeakers()
+        let ranges = p.resolvedSegments(of: clip)
+        let t = Timeline.clip(clip, in: p, sourceRanges: ranges, clipStarts: [0, ranges[0].duration])
+        let json = try t.json()
+        #expect(try JSONDecoder().decode(Timeline.self, from: Data(json.utf8)) == t)
+        #expect(json.split(separator: "\n").filter { $0.contains("\"text\": \"w") && $0.contains("\"segment\"") }.count == 5)
+    }
+}
+
 @Suite(.serialized) struct RenderIntegrationTests {
     @Test(.enabled(if: haveSine)) func crossfadedJoinsHaveNoClicksAndExactFrames() async throws {
         let src = fixture("sine-1080.mp4")
@@ -95,7 +151,10 @@ func samples(_ url: URL) async throws -> [Float] {
         let r = try await Renderer(project: p, source: src)
         let out = try await r.render(p.clip(c)!, into: dir, options: .init())
         #expect(out.file.lastPathComponent == "clip-01-1080p.mp4")
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("clip-01-1080p.vtt").path))
+        #expect(out.file.deletingLastPathComponent().lastPathComponent == "clip-01")     // the clip's own folder
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("clip-01/clip-01-1080p.vtt").path))
+        let timeline = try JSONDecoder().decode(Timeline.self, from: Data(contentsOf: dir.appendingPathComponent("clip-01/clip-01-1080p.timeline.json")))
+        #expect(timeline.segments.count == 3)
 
         let asset = AVURLAsset(url: out.file)
         let video = try await asset.loadTracks(withMediaType: .video)[0]
@@ -144,10 +203,14 @@ func samples(_ url: URL) async throws -> [Float] {
         #expect(abs(out.duration - expected) < 0.1, "\(out.duration) vs \(expected)")
         let fileDuration = try await AVURLAsset(url: out.file).load(.duration).seconds
         #expect(abs(fileDuration - out.duration) < 0.1)
-        let vtt = try String(contentsOf: dir.appendingPathComponent("supercut-all-1080p.vtt"), encoding: .utf8)
+        let vtt = try String(contentsOf: dir.appendingPathComponent("supercut-all/supercut-all-1080p.vtt"), encoding: .utf8)
         #expect(vtt.contains("w1 w2"))
         #expect(vtt.contains("w5 w6"))
         #expect(!vtt.contains("w2 w5"))
+        let timeline = try JSONDecoder().decode(Timeline.self, from: Data(contentsOf: dir.appendingPathComponent("supercut-all/supercut-all-1080p.timeline.json")))
+        #expect(timeline.clips.map(\.title) == ["First", "Supercut"])
+        #expect(timeline.turns.map(\.text) == ["w1 w2", "w5 w6"])          // a new turn at the clip join
+        #expect(abs(timeline.duration - out.duration) < 0.05)
     }
 
     @Test(.enabled(if: haveTone)) func previewIs720pH264() async throws {
@@ -160,6 +223,7 @@ func samples(_ url: URL) async throws -> [Float] {
         #expect(r.info.width == 3840 && r.info.codec == .hevc)
         let out = try await r.render(p.clip(c)!, into: dir, options: .init(preview: true))
         #expect(out.file.lastPathComponent == "tone-test.preview.mp4")
+        #expect(out.file.deletingLastPathComponent().standardizedFileURL == dir.standardizedFileURL)   // previews stay flat
         let v = try await AVURLAsset(url: out.file).loadTracks(withMediaType: .video)[0]
         let (size, formats) = try await (v.load(.naturalSize), v.load(.formatDescriptions))
         #expect(size == CGSize(width: 1280, height: 720))
@@ -178,7 +242,7 @@ func samples(_ url: URL) async throws -> [Float] {
         #expect(r.resolutionLabel(.full) == "4k")
         let out = try await r.render(p.clip(c)!, into: dir, options: .init(resolution: .hd720))
         #expect(out.file.lastPathComponent == "tone-test-720p.mp4")
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("tone-test-720p.vtt").path))
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("tone-test/tone-test-720p.vtt").path))
         let v = try await AVURLAsset(url: out.file).loadTracks(withMediaType: .video)[0]
         let (size, formats) = try await (v.load(.naturalSize), v.load(.formatDescriptions))
         #expect(size == CGSize(width: 1280, height: 720))
@@ -249,20 +313,21 @@ func samples(_ url: URL) async throws -> [Float] {
         let rb = try await r.render(p.clip(b)!, into: dir, options: .init())
         let cut = try await r.joinSupercut([ra, rb], slug: "talk-supercut", into: dir, options: .init())
         #expect(cut.file.lastPathComponent == "talk-supercut-1080p.mp4")
+        #expect(cut.file.deletingLastPathComponent() == dir.appendingPathComponent("talk-supercut", isDirectory: true))
         #expect(abs(cut.duration - (ra.duration + rb.duration)) < 0.1, "\(cut.duration) vs \(ra.duration + rb.duration)")
-        let vtt = try String(contentsOf: dir.appendingPathComponent("talk-supercut-1080p.vtt"), encoding: .utf8)
+        let vtt = try String(contentsOf: dir.appendingPathComponent("talk-supercut/talk-supercut-1080p.vtt"), encoding: .utf8)
         #expect(vtt.contains("w1 w2") && vtt.contains("w5 w6"))
         // The second clip's caption starts where that clip starts in the supercut.
         let lines = vtt.components(separatedBy: "\n")
         let cueLine = try #require(lines.firstIndex { $0.contains("w5") })
         let start = try #require(Captions.parseStamp(lines[cueLine - 1].components(separatedBy: " --> ")[0]))
-        let inClip = try #require(Captions.parseStamp(try String(contentsOf: dir.appendingPathComponent("second-1080p.vtt"), encoding: .utf8)
+        let inClip = try #require(Captions.parseStamp(try String(contentsOf: dir.appendingPathComponent("second/second-1080p.vtt"), encoding: .utf8)
             .components(separatedBy: "\n").first { $0.contains(" --> ") }!.components(separatedBy: " --> ")[0]))
         #expect(abs(start - (ra.duration + inClip)) < 0.1, "\(start) vs \(ra.duration) + \(inClip)")
-        let md = try String(contentsOf: dir.appendingPathComponent("talk-supercut-1080p.md"), encoding: .utf8)
+        let md = try String(contentsOf: dir.appendingPathComponent("talk-supercut/talk-supercut-1080p.md"), encoding: .utf8)
         #expect(md.contains("0:00 First\n0:0"))
         #expect(md.contains("Second"))
         #expect(md.contains("About the second."))
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("second-1080p.md").path))
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("second/second-1080p.md").path))
     }
 }

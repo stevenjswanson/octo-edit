@@ -9,15 +9,42 @@ struct RenderCommand: AsyncParsableCommand {
         commandName: "render",
         abstract: "Export the clips marked in a project's transcript.md.",
         discussion: """
-        Each clip becomes <slug>-4k.mp4 (same resolution and frame rate as the input,
-        hardware-encoded; the label is the resolution) with <slug>-4k.vtt captions and
-        <slug>-4k.md notes, or <slug>-720p.* with --720p. --supercut also joins them into
-        one video whose .md has YouTube chapters.
+        Each clip gets its own folder, exports/<slug>/, holding <slug>-4k.mp4 (same
+        resolution and frame rate as the input, hardware-encoded; the label is the
+        resolution), <slug>-4k.vtt captions, <slug>-4k.timeline.json (see TIMELINE)
+        and <slug>-4k.md notes; --720p makes <slug>-720p.* in the same folder.
+        --supercut also joins the clips into one video in its own folder, whose .md
+        has YouTube chapters.
         Use --check to validate transcript.md without rendering, and --preview for fast
-        720p <slug>.preview.mp4 versions in exports/preview/.
+        720p <slug>.preview.mp4 versions in exports/preview/ (no folders, no sidecars).
         With framing 9:16 (front matter `defaults: { framing: "9:16" }`, or --framing),
         clips are a full-height 9:16 column that follows whoever is speaking, named
         <slug>-4k-9x16.*; build face tracks first with `octoedit faces`.
+
+        TIMELINE
+          <name>.timeline.json says who speaks when and where the cuts are, so other
+          tools need not parse transcript.md. Every time is in seconds on the
+          exported video's own clock (0 = its first frame), rounded to 1 ms, from
+          the frame-snapped cuts the encoder used. Arrays have one element per line.
+          {"octoedit": 1,                 format version
+           "source": path,                input video, as written in transcript.md
+           "duration": s,                 length of the exported video
+           "speakers": [name],            in order of first appearance
+           "clips": [{"slug", "title", "start", "end"}],
+                                          one per clip in the video (several in a
+                                          supercut)
+           "segments": [{"clip", "start", "end", "sourceStart", "sourceEnd"}],
+                                          each kept run of the input, in order;
+                                          every boundary between two is a cut, and
+                                          sourceStart/End are on the input's clock
+           "turns": [{"speaker", "start", "end", "text"}],
+                                          consecutive kept words by one speaker; a
+                                          turn may span a cut, and a new one starts
+                                          at each change of speaker or of clip
+           "words": [{"start", "end", "speaker", "segment", "text"}]}
+                                          each kept word; segment indexes segments
+          speaker is null for words with no speaker. Words typed by hand (never
+          spoken, so untimed) are left out, as in the captions.
 
         EXAMPLES
           octoedit render --check seminar.octoedit           validate; list the clips
@@ -33,7 +60,8 @@ struct RenderCommand: AsyncParsableCommand {
                       "firstWords", "lastWords"}]}
         After an export:
           {"folder": path, "files": [{"slug", "name", "video", "captions",
-                                      "notes", "duration"}]}
+                                      "notes", "timeline", "duration"}]}
+          (each file's paths are inside folder/<slug>/, except previews)
         Exit code 1 if transcript.md has errors.
         """
     )
@@ -59,7 +87,7 @@ struct RenderCommand: AsyncParsableCommand {
     @Option(name: .customLong("clip"), help: "Only this clip (by slug); repeatable.")
     var clips: [String] = []
 
-    @Option(help: "Output folder (default: the package's exports/ folder).")
+    @Option(help: "Output folder, which gets one subfolder per clip (default: the package's exports/ folder).")
     var dest: String?
 
     @Flag(help: "Also join the exported clips, in order, into one <project>-supercut-4k.mp4 (with chapters in its .md).")

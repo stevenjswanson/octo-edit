@@ -15,12 +15,20 @@ public enum Captions {
     /// belong to clip i; cues never straddle two clips.
     public static func webVTT(supercut clips: [Clip], in p: Project, segmentCounts: [Int],
                               sourceRanges: [ResolvedSegment], clipStarts: [Seconds]) -> String {
+        render(timedWords(supercut: clips, in: p, segmentCounts: segmentCounts,
+                          sourceRanges: sourceRanges, clipStarts: clipStarts))
+    }
+
+    /// The clips' kept words, re-timed to where their segments landed; `group` is the
+    /// clip's index, `segment` the composition segment the word plays in.
+    static func timedWords(supercut clips: [Clip], in p: Project, segmentCounts: [Int],
+                           sourceRanges: [ResolvedSegment], clipStarts: [Seconds]) -> [Timed] {
         var words: [Timed] = []
         if segmentCounts.reduce(0, +) == sourceRanges.count {
             var k = 0
             for (i, (clip, n)) in zip(clips, segmentCounts).enumerated() {
                 words += timedWords(clip, in: p, sourceRanges: Array(sourceRanges[k..<k + n]),
-                                    clipStarts: Array(clipStarts[k..<k + n]), group: i)
+                                    clipStarts: Array(clipStarts[k..<k + n]), group: i, firstSegment: k)
                 k += n
             }
         } else {
@@ -29,7 +37,7 @@ public enum Captions {
                 words += timedWords(clip, in: p, sourceRanges: sourceRanges, clipStarts: clipStarts, group: i)
             }
         }
-        return render(words)
+        return words
     }
 
     /// Joins WebVTT files written by `webVTT`, shifting each by its start time and
@@ -58,10 +66,10 @@ public enum Captions {
         return h * 3600 + m * 60 + sec
     }
 
-    struct Timed { var text: String; var start: Seconds; var end: Seconds; var speaker: String?; var group: Int }
+    struct Timed { var text: String; var start: Seconds; var end: Seconds; var speaker: String?; var group: Int; var segment = 0 }
 
     static func timedWords(_ clip: Clip, in p: Project, sourceRanges: [ResolvedSegment], clipStarts: [Seconds],
-                           group: Int) -> [Timed] {
+                           group: Int, firstSegment: Int = 0) -> [Timed] {
         var words: [Timed] = []
         for w in p.keptWords(of: clip) {
             guard let s = w.start, let e = w.end,
@@ -69,7 +77,8 @@ public enum Captions {
             let r = sourceRanges[k]
             let a = clipStarts[k] + max(s, r.start) - r.start
             let b = clipStarts[k] + min(e, r.end) - r.start
-            words.append(Timed(text: w.text, start: a, end: b, speaker: p.paragraph(w.paragraph)?.speaker, group: group))
+            words.append(Timed(text: w.text, start: a, end: b, speaker: p.paragraph(w.paragraph)?.speaker, group: group,
+                               segment: firstSegment + k))
         }
         return words
     }

@@ -47,6 +47,7 @@ enum JSONReport {
         var video: String
         var captions: String?
         var notes: String?
+        var timeline: String?
         var duration: Double
     }
 
@@ -82,7 +83,7 @@ enum JSONReport {
         }
         return Export(folder: folder.path, files: rendered.map {
             FileOut(slug: $0.slug, name: $0.name, video: $0.file.path, captions: sidecar($0.file, "vtt"),
-                    notes: sidecar($0.file, "md"), duration: round($0.duration))
+                    notes: sidecar($0.file, "md"), timeline: sidecar($0.file, "timeline.json"), duration: round($0.duration))
         })
     }
 
