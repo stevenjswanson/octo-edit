@@ -28,6 +28,8 @@ struct ClipShelf: View {
                                 Button("Rename…") { model.requestRename(clip.id) }
                                 Button("Export…") { model.exportClip(clip.id) }
                                     .disabled(model.loadErrors || model.sourceMissing)
+                                Button("Re-export") { model.reexportClip(clip.id) }
+                                    .disabled(model.loadErrors || model.sourceMissing || model.exporter.isExporting)
                                 Divider()
                                 Button("Delete Clip") { model.deleteClip(clip.id) }
                             }

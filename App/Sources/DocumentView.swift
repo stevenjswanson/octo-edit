@@ -47,6 +47,9 @@ struct DocumentView: View {
         .sheet(isPresented: Binding(get: { model.showingExport }, set: { model.showingExport = $0 })) {
             ExportSheet(export: model.exporter, model: model, close: { model.showingExport = false })
         }
+        .sheet(isPresented: Binding(get: { model.reexporting }, set: { model.reexporting = $0 })) {
+            ReexportSheet(export: model.exporter, close: { model.reexporting = false }).interactiveDismissDisabled()
+        }
     }
 }
 

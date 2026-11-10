@@ -161,3 +161,40 @@ struct ExportSheet: View {
         if panel.runModal() == .OK, let url = panel.url { export.destination = url }
     }
 }
+
+/// Shelf ▸ Re-export: just a progress bar while one clip exports with the options
+/// already set. Closes itself when the export succeeds; stays up to show a failure.
+struct ReexportSheet: View {
+    let export: ExportModel
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(export.currentLabel.isEmpty ? "Re-export" : export.currentLabel)
+                .font(.headline).lineLimit(1).truncationMode(.middle)
+            switch export.phase {
+            case .failed(let m):
+                Label(m, systemImage: "xmark.octagon").foregroundStyle(.red).textSelection(.enabled)
+            case .finished(let m):
+                Text(m).foregroundStyle(.secondary)
+            default:
+                ProgressView(value: export.overall)
+                Text(export.destination?.path ?? "").font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            HStack {
+                Spacer()
+                if export.isExporting {
+                    Button("Cancel", role: .cancel) { export.cancel() }.keyboardShortcut(.cancelAction)
+                } else {
+                    Button("Close", action: close).keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        .onChange(of: export.phase) { _, phase in
+            if case .finished(let m) = phase, m.hasPrefix("Exported") { close() }
+        }
+    }
+}

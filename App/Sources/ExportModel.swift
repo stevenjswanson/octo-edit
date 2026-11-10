@@ -54,6 +54,8 @@ final class ExportModel {
     private(set) var sourceSummary = ""
 
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// The package being exported, for remembering its export folder.
+    @ObservationIgnored private var package: URL?
     @ObservationIgnored let queue: any ExportQueue = PassThroughExportQueue()
 
     var isExporting: Bool { phase == .exporting }
@@ -70,7 +72,8 @@ final class ExportModel {
                 slug: slugs[c.id] ?? "", duration: project.duration(of: c))
         }
         codec = project.settings.codec
-        if destination == nil { destination = package?.appendingPathComponent("exports") }
+        self.package = package
+        if destination == nil { destination = Self.lastFolder(package: package) }
         phase = .choosing
         if let source {
             Task {
@@ -89,6 +92,7 @@ final class ExportModel {
         guard let dest = destination, !isExporting, canExport else { return }
         let chosen = project.clips.filter { c in rows.contains { $0.id == c.id && $0.include } }
         guard !chosen.isEmpty else { return }
+        Self.remember(folder: dest, package: package)
         let individual = individualClips, makeSupercut = supercut
         // Work, in seconds of output, for the overall bar.
         let clipSeconds = chosen.map { project.duration(of: $0) }
@@ -188,6 +192,59 @@ final class ExportModel {
             }
             task = nil
         }
+    }
+
+    /// Shelf ▸ Re-export: one clip, straight away, with the options as they are now
+    /// (resolution, framing, codec) into the folder the last export went to. No choices,
+    /// no Finder window; `phase` and `overall` drive a progress sheet.
+    func reexport(_ id: ClipID, project: Project, source: URL, package: URL?, faces: FaceTracks?) {
+        guard !isExporting, let clip = project.clip(id) else { return }
+        let dest = destination ?? Self.lastFolder(package: package)
+        guard let dest else { return }
+        destination = dest
+        self.package = package
+        codec = project.settings.codec
+        overall = 0
+        currentRow = id
+        currentLabel = "Exporting \(clip.name ?? project.slug(of: id) ?? "clip")"
+        phase = .exporting
+        let options = Renderer.Options(codec: codec, resolution: resolution)
+        let queue = queue
+        task = Task {
+            do {
+                let renderer = try await Renderer(project: project, source: source, faces: faces)
+                let r = try await queue.run {
+                    try await renderer.render(clip, into: dest, options: options) { f in
+                        Task { @MainActor [weak self] in self?.overall = f }
+                    }
+                }
+                overall = 1
+                phase = .finished("Exported \(r.file.lastPathComponent).")
+            } catch is CancellationError {
+                phase = .finished("Cancelled; nothing partial was left behind.")
+            } catch {
+                phase = .failed(String(describing: error))
+            }
+            currentRow = nil
+            currentLabel = ""
+            task = nil
+        }
+    }
+
+    /// The folder this package last exported to (else its own exports/ folder).
+    static func lastFolder(package: URL?) -> URL? {
+        guard let package else { return nil }
+        if let path = (UserDefaults.standard.dictionary(forKey: "exportFolders") as? [String: String])?[package.path] {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return package.appendingPathComponent("exports")
+    }
+
+    private static func remember(folder: URL, package: URL?) {
+        guard let package else { return }
+        var all = UserDefaults.standard.dictionary(forKey: "exportFolders") as? [String: String] ?? [:]
+        all[package.path] = folder.path
+        UserDefaults.standard.set(all, forKey: "exportFolders")
     }
 
     func cancel() { task?.cancel() }

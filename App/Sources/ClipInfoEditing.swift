@@ -90,4 +90,11 @@ extension DocumentModel {
                          selected: selectedClip, onlySelected: onlySelected)
         showingExport = true
     }
+
+    /// Shelf ▸ Re-export: export this clip again, as last time, with only a progress sheet.
+    func reexportClip(_ id: ClipID) {
+        guard let source = sourceURL, !loadErrors, !sourceMissing else { return }
+        exporter.reexport(id, project: project, source: source, package: packageURL, faces: faces)
+        if exporter.isExporting { reexporting = true }
+    }
 }

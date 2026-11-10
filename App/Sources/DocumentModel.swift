@@ -82,6 +82,8 @@ final class DocumentModel {
     var suggesting = Set<ClipID>()
     @ObservationIgnored var warnedAboutNamer = false
     var showingExport = false
+    /// The Re-export progress sheet is up.
+    var reexporting = false
     /// Face boxes through the video (cache/faces.tsv), for 9:16 framing and speaker portraits.
     var faces: FaceTracks?
     /// Finding faces in the background: progress 0…1.
