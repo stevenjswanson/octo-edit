@@ -315,6 +315,27 @@ struct TranscriptView: NSViewRepresentable {
             return NSRange(location: start, length: end - start)
         }
 
+        /// ⌥⌫ / ⌥⌦ in cut mode: delete words from the transcript as text-edit mode would,
+        /// without leaving cut mode or stopping playback. Deletes the selected words, else
+        /// the word the caret is in, else the word before (⌫) or after (⌦) the caret.
+        func deleteWords(forward: Bool) {
+            guard let textView, !wordRanges.isEmpty else { return }
+            let r = textView.selectedRange()
+            let target: ClosedRange<Int>?
+            if r.length > 0 {
+                target = words(in: r)
+            } else {
+                let w = firstWord(endingAfter: r.location)          // the word the caret is in, or the next one
+                let inside = w < wordRanges.count && wordRanges[w].location < r.location
+                if inside || forward { target = w < wordRanges.count ? w...w : nil }
+                else { target = w > 0 ? (w - 1)...(w - 1) : nil }
+            }
+            guard let target else { return NSSound.beep() }
+            // The caret goes where the words were (the rebuild keeps it on the word after them).
+            textView.setSelectedRange(NSRange(location: wordRanges[target.lowerBound].location, length: 0))
+            model.deleteWords(target)
+        }
+
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !settingSelection, let textView else { return }
             if editing { updateTypingAttributes(textView); return }
@@ -823,6 +844,9 @@ final class WordTextView: NSTextView {
         if editing { return super.keyDown(with: event) }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if mods == .option, event.keyCode == 51 || event.keyCode == 117 {
+            return coordinator?.deleteWords(forward: event.keyCode == 117) ?? ()
+        }
         let action: Selector? = switch (event.keyCode, mods, key) {
         case (51, [], _), (117, [], _): #selector(ProjectDocument.omitSelection(_:))
         case (51, .shift, _), (117, .shift, _): #selector(ProjectDocument.restoreSelection(_:))
