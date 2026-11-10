@@ -338,8 +338,14 @@ final class DocumentModel {
             shelfSelection = Set(project.clips[min(a, b)...max(a, b)].map(\.id))
             return
         }
+        let wasPlaying = player.rate != 0 || preview.player.rate != 0
+        player.pause()
         select(clip: id, reveal: true, seekSource: true)
         focus(.preview)
+        // The preview starts from the top of the clip, even when it was already showing
+        // it (selecting the same clip again doesn't rebuild it, so it wouldn't move).
+        guard let clip = project.clip(id), let start = project.resolvedSegments(of: clip).first?.start else { return }
+        if wasPlaying { preview.playWhenReady(.from(start)) } else { preview.seek(toSourceTime: start) }
     }
 
     /// The shelf selection is two or more clips with no other clip between them.
