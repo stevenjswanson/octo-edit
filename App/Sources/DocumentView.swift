@@ -16,6 +16,7 @@ struct DocumentView: View {
                 TranscriptToolbar(model: model)
                 Divider()
                 if !model.issues.isEmpty { IssuesBanner(issues: model.issues) }
+                if let note = model.replaceNote { ReplaceNoteBanner(text: note) { model.replaceNote = nil } }
                 TranscriptView(model: model, revision: model.revision, selectedClip: model.selectedClip,
                                currentWord: model.currentWord, followPlayhead: model.anyPlaying && model.followPlayhead,
                                reveal: model.reveal, inspected: model.inspected,
@@ -39,6 +40,9 @@ struct DocumentView: View {
         }
         .sheet(isPresented: Binding(get: { model.identifyRequest }, set: { model.identifyRequest = $0 })) {
             IdentifySpeakersSheet(model: model)
+        }
+        .sheet(isPresented: Binding(get: { model.replacing != nil }, set: { if !$0 { model.replacing = nil } })) {
+            ReplaceVideoSheet(model: model, cancel: document.cancelReplaceVideo).interactiveDismissDisabled()
         }
         .sheet(isPresented: Binding(get: { model.showingExport }, set: { model.showingExport = $0 })) {
             ExportSheet(export: model.exporter, model: model, close: { model.showingExport = false })

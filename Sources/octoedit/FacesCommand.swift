@@ -77,7 +77,9 @@ struct FacesCommand: AsyncParsableCommand {
     }
 
     /// Scans the video, writes the cache, and says how many faces could be matched to speakers.
-    static func build(_ pkg: URL, source: URL, project: Project) async throws {
+    /// Returns the speakers who got a face.
+    @discardableResult
+    static func build(_ pkg: URL, source: URL, project: Project) async throws -> Set<String> {
         let started = Date()
         let faces = try await VisionFaceScanner().scan(video: source) { Console.progress("Finding faces", $0) }
         try PackageWriter.saveFaces(faces, to: pkg)
@@ -91,5 +93,6 @@ struct FacesCommand: AsyncParsableCommand {
             Console.note("Faces matched to speakers: " + (found.isEmpty ? "none" : speakers.filter(found.contains).joined(separator: ", "))
                          + (missing.isEmpty ? "" : "; no face for " + missing.joined(separator: ", ")))
         }
+        return found
     }
 }

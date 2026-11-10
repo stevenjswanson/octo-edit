@@ -279,3 +279,140 @@ func edgeError(_ words: [(start: Double, end: Double)], _ lines: [TruthLine]) ->
         #expect(p.paragraphs.map(\.speaker) == ["Kathy Lee", "Ori Z", "Kathy Lee"])
     }
 }
+
+@Suite struct ReplaceCheckTests {
+    /// Ten words 0.5 s apart starting at `shift`, in two paragraphs (A: words 1–5,
+    /// B: 6–10), with clips over words 2–4 and 7–9.
+    static func project(shift: Seconds = 0, stretch: [Int: Seconds] = [:], untimed: Set<Int> = []) -> Project {
+        var p = Project(source: "/old.mp4", zoom: ZoomInfo(file: "z.vtt", offset: 5))
+        p.paragraphs = [Paragraph(id: ParagraphID(1), speaker: "A"), Paragraph(id: ParagraphID(2), speaker: "B")]
+        p.words = (1...10).map { n in
+            let start = shift + Double(n) * 0.5
+            return Word(id: WordID(n), text: "w\(n)", start: untimed.contains(n) ? nil : start,
+                        end: untimed.contains(n) ? nil : start + 0.4 + (stretch[n] ?? 0), paragraph: ParagraphID(n <= 5 ? 1 : 2))
+        }
+        func clip(_ id: Int, _ name: String, _ a: Int, _ b: Int) -> Clip {
+            Clip(id: ClipID(id), name: name, segments: [Segment(inPoint: Boundary(word: WordID(a)), outPoint: Boundary(word: WordID(b)))])
+        }
+        p.clips = [clip(1, "First", 2, 4), clip(2, "Second", 7, 9)]
+        return p
+    }
+
+    @Test func aShiftedVideoChangesNothing() {
+        let changes = ReplaceCheck.clips(before: Self.project(), after: Self.project(shift: 3.42))
+        #expect(changes.map(\.slug) == ["first", "second"])
+        #expect(changes.allSatisfy { !$0.changed })
+        #expect(ReplaceCheck.issues(changes).isEmpty)
+    }
+
+    @Test func aClipWhoseEdgeMovedIsNamed() {
+        let changes = ReplaceCheck.clips(before: Self.project(), after: Self.project(shift: 3.42, stretch: [9: 0.8]))
+        #expect(changes.map(\.changed) == [false, true])
+        let issues = ReplaceCheck.issues(changes)
+        #expect(issues.count == 1)
+        #expect(issues[0].message.contains("\"Second\""))
+        #expect(issues[0].message.contains("check its start and end"))
+    }
+
+    @Test func aClipThatLostItsWordsIsNamed() {
+        let changes = ReplaceCheck.clips(before: Self.project(), after: Self.project(untimed: [2, 3, 4]))
+        #expect(changes[0].changed)
+        #expect(changes[0].reason == "has no timed words in the new video")
+    }
+
+    @Test func retargetTakesOnlyTheVideoAndTheZoomOffset() {
+        let old = Self.project()
+        var ingested = Project(source: "/new.mov", zoom: ZoomInfo(file: "other.vtt", offset: 1.58))
+        ingested.speakers = ["Someone Else"]
+        let p = ReplaceCheck.retarget(old, to: ingested)
+        #expect(p.source == "/new.mov")
+        #expect(p.zoom == ZoomInfo(file: "z.vtt", offset: 1.58))
+        var expected = old
+        expected.source = p.source
+        expected.zoom = p.zoom
+        #expect(p == expected)
+        // No Zoom transcript in the new ingest: the old offset stays.
+        #expect(ReplaceCheck.retarget(old, to: Project(source: "/new.mov")).zoom?.offset == 5)
+    }
+
+    /// 60 words half a second apart; `jitter` moves a word's times the way a second
+    /// recognizer run does.
+    static func transcription(shift: Seconds = 0, rate: Double = 1, jitter: (Int) -> Seconds = { _ in 0 }) -> [TimedWord] {
+        (0..<60).map { n in
+            let start = (Double(n) * 0.5) * rate + shift + jitter(n)
+            return TimedWord(text: "word\(n)", start: start, end: start + 0.4)
+        }
+    }
+
+    @Test func aSteadyOffsetKeepsTheOldTimesShifted() {
+        let old = Self.transcription()
+        // A third of the words are heard up to 0.4 s off, as a re-encoded copy's are.
+        let new = Self.transcription(shift: 2.5) { $0 % 3 == 0 ? Double($0 % 5) * 0.1 - 0.2 : 0 }
+        let r = ReplaceCheck.retiming(old: old, new: new)
+        #expect(r.keptOldTimes)
+        #expect(abs((r.shift?.offset ?? 0) - 2.5) < 1e-9)
+        #expect(r.words == ReplaceCheck.shifted(old, by: r.shift!.offset))
+        #expect(r.summary == "The new video starts 2.50 s earlier than the old one; word timings were kept and moved by that much.")
+        // The Zoom clock stays where it was: Zoom = source + offset.
+        let p = ReplaceCheck.retarget(Self.project(), to: Project(source: "/new.mov", zoom: ZoomInfo(file: "z.vtt", offset: 9)), retiming: r)
+        #expect(abs((p.zoom?.offset ?? 0) - 2.5) < 1e-9)
+    }
+
+    @Test func theWaveformsPinTheOffsetDown() {
+        // Loudness that never repeats, 200 buckets a second for 30 s; the new video has 2.5 s more at the front.
+        var seed: UInt64 = 42
+        func next() -> Float { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Float(seed >> 40) / Float(1 << 24) }
+        let sound = (0..<6000).map { _ in next() }
+        let old = Envelope(bucketsPerSecond: 200, rms: sound)
+        let new = Envelope(bucketsPerSecond: 200, rms: [Float](repeating: 0, count: 500) + sound)
+        #expect(abs(ReplaceCheck.refined(2.52, old: old, new: new) - 2.5) < 1e-9)
+        #expect(abs(ReplaceCheck.refined(-2.47, old: new, new: old) + 2.5) < 1e-9)
+        // A waveform of some other sound settles nothing.
+        let other = Envelope(bucketsPerSecond: 200, rms: (0..<6500).map { _ in next() })
+        #expect(ReplaceCheck.refined(2.52, old: old, new: other) == 2.52)
+        // The words alone say 2.52 (every word heard 20 ms late); with the waveforms, 2.50.
+        let r = ReplaceCheck.retiming(old: Self.transcription(), new: Self.transcription(shift: 2.52), oldEnvelope: old, newEnvelope: new)
+        #expect(r.keptOldTimes)
+        #expect(abs((r.shift?.offset ?? 0) - 2.5) < 1e-9)
+    }
+
+    @Test func driftingClocksTakeTheNewTimes() {
+        let old = Self.transcription()
+        let new = Self.transcription(shift: 2.5, rate: 1.01)       // 0.3 s apart by the end
+        let r = ReplaceCheck.retiming(old: old, new: new)
+        #expect(!r.keptOldTimes)
+        #expect(r.words == new)
+        #expect(r.summary.hasPrefix("The two videos drift apart"))
+        let p = ReplaceCheck.retarget(Self.project(), to: Project(source: "/new.mov", zoom: ZoomInfo(file: "z.vtt", offset: 9)), retiming: r)
+        #expect(p.zoom?.offset == 9)
+    }
+
+    @Test func tooFewSharedWordsTakeTheNewTimes() {
+        let old = Array(Self.transcription().prefix(5))
+        let new = Array(Self.transcription(shift: 1).prefix(5))
+        #expect(!ReplaceCheck.retiming(old: old, new: new).keptOldTimes)
+        #expect(ReplaceCheck.clockShift(old: old, new: []) == nil)
+    }
+
+    @Test func aClipBeforeTheNewVideosStartIsNamed() {
+        // The new video starts 1.2 s later: the first clip's first word (at 1.0 s) is cut off.
+        let changes = ReplaceCheck.clips(before: Self.project(), after: Self.project(shift: -1.2), duration: 60)
+        #expect(changes.map(\.outside) == [true, false])
+        #expect(changes[0].reason?.contains("outside the new video") == true)
+        // …and one that runs past its end.
+        #expect(ReplaceCheck.clips(before: Self.project(), after: Self.project(), duration: 4.0).map(\.outside) == [false, true])
+    }
+
+    @Test func faceChangesAreListedInSpeakerOrder() {
+        let c = ReplaceCheck.faces(before: ["A", "B"], after: ["A", "C"], speakers: ["A", "B", "C"])
+        #expect(c.now == ["A", "C"])
+        #expect(c.gained == ["C"])
+        #expect(c.lost == ["B"])
+        #expect(c.summary == "Faces matched to speakers: A, C (new). No face found for B in the new video.")
+    }
+
+    @Test func clipsWithASpeaker() {
+        #expect(Self.project().clips(withSpeaker: "B") == [ClipID(2)])
+        #expect(Self.project().clips(withSpeaker: "Nobody").isEmpty)
+    }
+}

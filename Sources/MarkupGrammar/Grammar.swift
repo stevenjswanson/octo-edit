@@ -9,6 +9,8 @@ public enum PackageLayout {
     public static let cacheDir = "cache"
     public static let waveform = "cache/waveform.bin"
     public static let faces = "cache/faces.tsv"
+    /// The words.tsv a Replace Video overwrote, kept in case the result is wrong.
+    public static let wordsBeforeReplace = "cache/words.before-replace.tsv"
     public static let exportsDir = "exports"
     public static let gitignore = ".gitignore"
     public static let gitignoreContents = "cache/\nexports/\n"

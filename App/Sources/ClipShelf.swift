@@ -79,6 +79,14 @@ struct ClipShelf: View {
                     .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 3))
                     .padding(3)
             }
+            .overlay(alignment: .topLeading) {
+                if let why = model.needsReview[clip.id] {
+                    Circle().fill(.orange).frame(width: 10, height: 10)
+                        .overlay(Circle().stroke(.white, lineWidth: 1.5))
+                        .padding(4)
+                        .help(why + ". Play the clip to clear this mark.")
+                }
+            }
             Text("\(n + 1)  \(clip.name ?? "Unnamed")").font(.caption.weight(.medium)).lineLimit(1)
             Text(slug).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }

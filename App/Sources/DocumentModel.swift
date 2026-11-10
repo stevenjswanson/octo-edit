@@ -87,6 +87,15 @@ final class DocumentModel {
     /// Finding faces in the background: progress 0…1.
     var findingFaces: Double?
     @ObservationIgnored var labelsCache: (key: Int, labels: FaceLabels)?
+    /// Replace Video…: the sheet's state while it runs and when it shows its result.
+    var replacing: ReplaceVideoState?
+    /// Clips to look at after a Replace Video, with why (an orange dot in the shelf).
+    /// A clip's mark goes when it is played in the preview. Not saved.
+    var needsReview: [ClipID: String] = [:]
+    /// How the speakers' faces changed in the new video (a banner, until dismissed).
+    var replaceNote: String?
+    /// The speakers who had a face before a Replace Video, until faces are found again.
+    @ObservationIgnored var facesBeforeReplace: Set<String>?
     /// Identify Speakers… progress (0…1) while it runs.
     var identifyingSpeakers: Double?
     var showingSpeakers = false
@@ -144,6 +153,7 @@ final class DocumentModel {
         preview.onPlay = { [weak self] in
             self?.player.pause()
             self?.activePane = .preview
+            if let id = self?.selectedClip, self?.needsReview[id] != nil { self?.needsReview[id] = nil }
         }
     }
 
@@ -159,6 +169,7 @@ final class DocumentModel {
 
     func apply(_ result: PackageReader.Result) {
         textEditing = false   // a reload replaces whatever was being typed
+        needsReview = [:]     // clip IDs belong to the project being replaced
         issues = result.issues
         loadErrors = result.hasErrors
         envelope = result.envelope

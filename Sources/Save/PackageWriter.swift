@@ -7,7 +7,7 @@ public enum PackageWriter {
     public struct Options: Sendable {
         /// Timed word list for words.tsv. Written only when given (ingest) or when the
         /// package has none: words.tsv is the record of what was spoken and when, and
-        /// is never rewritten by ordinary saves.
+        /// is never rewritten by ordinary saves (only by `saveReplacingVideo`).
         public var words: [TimedWord]?
         public var envelope: Envelope?
         /// Original Zoom transcript to copy into the package (first save only).
@@ -64,6 +64,23 @@ public enum PackageWriter {
         try FileManager.default.createDirectory(at: package.appendingPathComponent(PackageLayout.cacheDir),
                                                 withIntermediateDirectories: true)
         try write(FacesFile.encode(faces), to: package.appendingPathComponent(PackageLayout.faces))
+    }
+
+    /// Saves a project whose video was replaced: transcript.md, plus the new video's
+    /// words.tsv and waveform. The old words.tsv is kept in the cache, and the face
+    /// cache (scanned from the old video) is removed.
+    public static func saveReplacingVideo(_ project: Project, words: [TimedWord], envelope: Envelope, to package: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: package.appendingPathComponent(PackageLayout.cacheDir), withIntermediateDirectories: true)
+        let wordsURL = package.appendingPathComponent(PackageLayout.words)
+        let backup = package.appendingPathComponent(PackageLayout.wordsBeforeReplace)
+        if fm.fileExists(atPath: wordsURL.path) {
+            if fm.fileExists(atPath: backup.path) { try fm.removeItem(at: backup) }
+            try fm.copyItem(at: wordsURL, to: backup)
+        }
+        try save(project, to: package, options: Options(words: words, envelope: envelope))
+        let faces = package.appendingPathComponent(PackageLayout.faces)
+        if fm.fileExists(atPath: faces.path) { try fm.removeItem(at: faces) }
     }
 
     /// The source path as it should be written: relative to the package when the video

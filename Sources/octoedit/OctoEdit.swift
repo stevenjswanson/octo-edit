@@ -26,6 +26,9 @@ struct OctoEdit: AsyncParsableCommand {
                as .mp4 video, .vtt captions, .timeline.json and .md notes
                (the timeline format: octoedit render --help)
 
+          Edited against a small copy of the recording? Switch to the original with
+          octoedit replace-video --video talk-4k.mov talk.octoedit, then render.
+
         FOR AI AGENTS
           Read `octoedit guide` before editing transcript.md. Change it only by
           inserting markers, never by changing words. Use --json for
@@ -38,7 +41,7 @@ struct OctoEdit: AsyncParsableCommand {
           64 bad command-line arguments
           130 cancelled (Ctrl-C); finished clips stay, nothing partial is left
         """,
-        subcommands: [InitCommand.self, RenderCommand.self, SplitCommand.self, NameCommand.self, SpeakersCommand.self, FacesCommand.self, GuideCommand.self]
+        subcommands: [InitCommand.self, RenderCommand.self, SplitCommand.self, NameCommand.self, SpeakersCommand.self, FacesCommand.self, ReplaceVideoCommand.self, GuideCommand.self]
     )
 }
 

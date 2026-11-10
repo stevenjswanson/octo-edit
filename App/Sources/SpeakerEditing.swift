@@ -275,6 +275,7 @@ extension DocumentModel {
                 faces = found
                 try? PackageWriter.saveFaces(found, to: package)
                 refreshPreviewNow()
+                reportFaceChange()
             } catch {
                 flash("Couldn’t find faces: \(error)")
             }

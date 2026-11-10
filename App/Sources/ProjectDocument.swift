@@ -3,6 +3,10 @@ import SwiftUI
 import Core
 import Load
 import Save
+import Ingest
+import Transcribe
+import Waveform
+import Render
 
 /// One `.octoedit` package. An NSDocument rather than a SwiftUI FileDocument because
 /// Load and Save work on the package *URL* (the source path is relative to it, and
@@ -17,6 +21,7 @@ final class ProjectDocument: NSDocument {
     private var watcher: DirectoryWatcher?
     private var asking = false
     private var autosaveTimer: Timer?
+    private var replaceTask: Task<Void, Never>?
 
     /// Seconds after the first unsaved change before it is written to disk.
     static let autosaveDelay: TimeInterval = 10
@@ -376,6 +381,9 @@ final class ProjectDocument: NSDocument {
             case #selector(showSpeakers(_:)): true
             case #selector(identifySpeakers(_:)): m.canEdit && m.identifyingSpeakers == nil && !m.sourceMissing
             case #selector(findFaces(_:)): m.findingFaces == nil && !m.sourceMissing
+            // Not while a scan of the old video is running: it would finish into the new one's caches.
+            case #selector(replaceVideo(_:)):
+                m.canEdit && m.replacing == nil && m.findingFaces == nil && m.identifyingSpeakers == nil && !m.analyzingWaveform
             default: nil
             }
         }
@@ -395,6 +403,81 @@ final class ProjectDocument: NSDocument {
             guard let self, response == .OK, let url = panel.url else { return }
             MainActor.assumeIsolated { self.model.setSource(url) }
             self.updateChangeCount(.changeDone)
+        }
+    }
+
+    // MARK: Replace Video
+
+    /// File ▸ Replace Video…: use another video of the same recording (e.g. the
+    /// high-resolution original), which may start earlier or later. The same steps as
+    /// `octoedit replace-video`: transcribe the new video, save the project (unsaved
+    /// edits included) with the new words.tsv, and load it again so Load re-times the
+    /// transcript against it.
+    @objc func replaceVideo(_ sender: Any?) {
+        guard let window = windowControllers.first?.window, let package = fileURL else { return }
+        MainActor.assumeIsolated { model.endTextEditing() }
+        if changedOnDisk { offerDiskVersion(); return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .audiovisualContent]
+        panel.message = "Choose the video to use from now on. OctoEdit transcribes it and finds your clips in it."
+        panel.prompt = "Replace"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            MainActor.assumeIsolated { self.runReplaceVideo(url, package: package) }
+        }
+    }
+
+    func cancelReplaceVideo() { replaceTask?.cancel() }
+
+    @MainActor private func runReplaceVideo(_ video: URL, package: URL) {
+        let model = self.model
+        let before = model.project
+        let oldURL = model.sourceMissing ? nil : model.sourceURL
+        let oldName = model.sourceURL?.lastPathComponent ?? "the old video"
+        let facesBefore = Set(model.faceLabels?.tracks.compactMap(\.speaker) ?? [])
+        let oldEnvelope = model.envelope
+        // The package's own copy of the Zoom transcript, so the new words read as the old ones did.
+        let zoom = before.zoom.map { package.appendingPathComponent($0.file) }
+            .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        model.replacing = .running(stage: "Starting", fraction: 0)
+        replaceTask = Task { @MainActor [weak self] in
+            defer { self?.replaceTask = nil }
+            do {
+                let newInfo = try await SourceInfo.read(video)
+                var oldInfo: SourceInfo?
+                if let oldURL { oldInfo = try? await SourceInfo.read(oldURL) }
+                let result = try await Ingest(transcriber: AppleSpeechTranscriber(), analyzer: AssetEnvelopeAnalyzer())
+                    .run(video: video, zoom: zoom, settings: before.settings) { stage, fraction in
+                        Task { @MainActor in
+                            if case .running = model.replacing { model.replacing = .running(stage: stage.rawValue, fraction: fraction) }
+                        }
+                    }
+                try Task.checkCancellation()
+                guard let self else { return }
+                model.replacing = .running(stage: "Saving", fraction: 1)
+                let oldWords = try PackageReader.loadWords(package)
+                let retiming = ReplaceCheck.retiming(old: oldWords, new: result.words, oldEnvelope: oldEnvelope, newEnvelope: result.envelope)
+                let project = ReplaceCheck.retarget(before, to: result.project, retiming: retiming)
+                // Our own write is not an outside change to ask about.
+                self.asking = true
+                defer { self.asking = false }
+                try PackageWriter.saveReplacingVideo(project, words: retiming.words, envelope: result.envelope, to: package)
+                // Load re-times the text against the new words.tsv; saving that writes the paragraph times to match.
+                try PackageWriter.save(try PackageReader.load(package).project, to: package)
+                model.faces = nil
+                model.replaceNote = nil
+                model.facesBeforeReplace = facesBefore.isEmpty ? nil : facesBefore
+                try self.revert(toContentsOf: package, ofType: self.fileType ?? "edu.ucsd.octoedit.project")
+                let changes = ReplaceCheck.clips(before: before, after: model.project, duration: newInfo.duration)
+                model.videoReplaced(changes)
+                func size(_ info: SourceInfo?) -> String { info.map { " \($0.width)×\($0.height)" } ?? "" }
+                model.replacing = .done(ReplaceVideoResult(before: oldName + size(oldInfo), after: video.lastPathComponent + size(newInfo),
+                                                           shift: retiming.summary, changes: changes))
+            } catch is CancellationError {
+                model.replacing = nil
+            } catch {
+                model.replacing = .failed(type(of: error) is NSError.Type ? (error as NSError).localizedDescription : String(describing: error))
+            }
         }
     }
 }

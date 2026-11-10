@@ -20,6 +20,7 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | `init --video V [--zoom Z] [--speakers "A, B"] [--pre 120ms --post 180ms --crossfade 20ms] [--codec hevc\|h264] PKG` | Transcribes V on this Mac (English, first audio track), tightens word edges against the audio, takes speakers and text from the Zoom `.vtt`, and writes an un-annotated `transcript.md`. `--speakers` sets the roster and also finds who speaks when (as `speakers` below). |
 | `faces PKG` | Finds faces through the video into `cache/faces.tsv` (about ⅓ of the video's length for 4K), for 9:16 framing. `init` and `speakers` take `--faces` to do this too. |
 | `speakers PKG [--speakers "A, B"] [--faces]` | Finds who speaks when from the voices: every voice change starts a paragraph, and voices are named from the roster (or Speaker 1, 2, …). Resets every speaker name; markers stay on their words. Lists turns under a second to check. |
+| `replace-video --video V PKG [--faces]` | Points the project at another video of the same recording, e.g. the high-resolution original, which may start earlier or later (in the app: File ▸ Replace Video…). Transcribes V and compares the two transcriptions (and waveforms) to find how far apart the two clocks are. If that distance is steady, the old word timings are kept and moved by it, so cuts land where they did; if the two drift, word times come from the new transcription and clips whose length changed are listed to check. Text, clips, speakers and notes are untouched. Removes `cache/faces.tsv` (it was scanned from the old video); `--faces` rescans and says how the speakers with a face changed. |
 | `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--framing source\|9:16] [--dest DIR]` | Exports each clip into its own folder `exports/SLUG/`: `SLUG.mp4` (input resolution and frame rate, hardware-encoded) plus `SLUG.vtt` captions, `SLUG.timeline.json` (who speaks when and where the cuts are, on the clip's own clock) and a `notes.md`. `--check` only validates; `--preview` makes fast 720p `SLUG.preview.mp4` files in `exports/preview/`. |
 | `name PKG [--clip SLUG]… [--apply [--all]]` | Suggests titles with Apple's on-device model into the front matter. `--apply` names unnamed clips; `--all` renames every clip. |
 
@@ -60,9 +61,10 @@ stay minimal.
 ```
 meeting.octoedit/
   transcript.md   text + edit markers (the document)
-  words.tsv       timed words from ingest; never rewritten
+  words.tsv       timed words from ingest; rewritten only by replace-video
   *.vtt           the original Zoom transcript
-  cache/          regenerable (waveform.bin, faces.tsv: face boxes, no fingerprints)
+  cache/          regenerable (waveform.bin, faces.tsv: face boxes, no fingerprints);
+                  after replace-video, also words.before-replace.tsv (the old words.tsv)
   exports/        rendered clips, one folder per clip (SLUG/); previews in preview/
 ```
 

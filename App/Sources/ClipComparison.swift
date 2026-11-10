@@ -9,7 +9,10 @@ struct ClipComparison: View {
         let id: String          // slug
         var here: Side?
         var disk: Side?
+        /// Set to decide the ● directly, rather than by comparing the two sides.
+        var marked: Bool?
         var differs: Bool {
+            if let marked { return marked }
             guard let here, let disk else { return true }
             return here.name != disk.name || abs(here.duration - disk.duration) >= 0.05
         }
@@ -17,6 +20,11 @@ struct ClipComparison: View {
 
     let rows: [Row]
     let diskProblem: String?
+    var titles = ("In OctoEdit", "On disk")
+    /// Replaces the line under the table.
+    var summary: String?
+    /// Called with a row's slug when it is clicked.
+    var onSelect: ((String) -> Void)?
 
     /// Rows in reading order: OctoEdit's clips, with disk-only clips placed after the
     /// clip they follow on disk.
@@ -48,8 +56,8 @@ struct ClipComparison: View {
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                 GridRow {
                     Text("")
-                    Text("In OctoEdit").font(.caption.weight(.semibold))
-                    Text("On disk").font(.caption.weight(.semibold))
+                    Text(titles.0).font(.caption.weight(.semibold))
+                    Text(titles.1).font(.caption.weight(.semibold))
                 }
                 Divider().gridCellUnsizedAxes(.horizontal)
                 ForEach(rows) { row in
@@ -60,16 +68,18 @@ struct ClipComparison: View {
                         cell(row.here)
                         cell(row.disk)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture { onSelect?(row.id) }
                 }
             }
             .padding(8)
             }
             .frame(height: min(CGFloat(rows.count) * 22 + 44, 300))
             .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-            Text(rows.isEmpty ? "Neither version has clips."
+            Text(summary ?? (rows.isEmpty ? "Neither version has clips."
                  : changed == 0 ? "The clips are the same; the text or other details differ."
-                 : "\(changed) of \(rows.count) clip\(rows.count == 1 ? "" : "s") differ (marked ●).")
-                .font(.caption).foregroundStyle(.secondary)
+                 : "\(changed) of \(rows.count) clip\(rows.count == 1 ? "" : "s") differ (marked ●)."))
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let diskProblem {
                 Label(diskProblem, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
             }

@@ -64,6 +64,7 @@ enum MainMenu {
         m.addItem(item("Save", #selector(NSDocument.save(_:)), "s"))
         m.addItem(item("Save As…", #selector(NSDocument.saveAs(_:)), "s", [.command, .shift]))
         m.addItem(.separator())
+        m.addItem(item("Replace Video…", #selector(ProjectDocument.replaceVideo(_:))))
         m.addItem(item("Export Clips…", #selector(ProjectDocument.exportClips(_:)), "e", [.command, .shift]))
         return m
     }

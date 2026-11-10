@@ -419,6 +419,48 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         #expect(try String(contentsOf: pkg.appendingPathComponent("words.tsv"), encoding: .utf8) == before)
         #expect(FileManager.default.fileExists(atPath: pkg.appendingPathComponent(".gitignore").path))
     }
+
+    /// Replace Video relies on this: the same transcript.md against another video's
+    /// words.tsv keeps every clip, on the new video's clock.
+    @Test func replacingTheVideoRetimesTheSameClips() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("octo-\(UUID().uuidString)")
+        let pkg = dir.appendingPathComponent("meeting.octoedit")
+        defer { try? fm.removeItem(at: dir) }
+        var p = parse(handWritten).project
+        p.source = dir.appendingPathComponent("proxy.mp4").path
+        let timed = timedWords(for: handWritten)
+        try PackageWriter.save(p, to: pkg, options: .init(words: timed, envelope: Envelope(bucketsPerSecond: 200, rms: [0.1])))
+        try PackageWriter.saveFaces(FaceTracks(width: 1280, height: 720, frames: []), to: pkg)
+        let before = try PackageReader.load(pkg)
+        let oldWords = try String(contentsOf: pkg.appendingPathComponent(PackageLayout.words), encoding: .utf8)
+
+        // The new video starts 3 s earlier, and its transcription heard one word differently.
+        var shifted = timed.map { TimedWord(text: $0.text, start: $0.start + 3, end: $0.end + 3, confidence: $0.confidence) }
+        shifted[4].text = "misheard"
+        var q = before.project
+        q.source = dir.appendingPathComponent("camera-4k.mov").path
+        q.zoom?.offset = 0.42
+        try PackageWriter.saveReplacingVideo(q, words: shifted, envelope: Envelope(bucketsPerSecond: 200, rms: [0.3]), to: pkg)
+
+        let after = try PackageReader.load(pkg)
+        #expect(!after.hasErrors)
+        #expect(after.project.source == "../camera-4k.mov")
+        #expect(after.project.zoom?.offset == 0.42)
+        #expect(after.envelope?.rms == [0.3])
+        #expect(after.project.clips == before.project.clips)
+        #expect(after.project.words.map(\.text) == before.project.words.map(\.text))
+        for (a, b) in zip(before.project.clips, after.project.clips) {
+            let was = before.project.resolvedSegments(of: a), now = after.project.resolvedSegments(of: b)
+            #expect(was.count == now.count)
+            for (x, y) in zip(was, now) {
+                #expect(abs(y.start - x.start - 3) < 1e-6)
+                #expect(abs(y.end - x.end - 3) < 1e-6)
+            }
+        }
+        #expect(try String(contentsOf: pkg.appendingPathComponent(PackageLayout.wordsBeforeReplace), encoding: .utf8) == oldWords)
+        #expect(PackageReader.loadFaces(pkg) == nil)
+    }
 }
 
 @Suite struct MergedClipRoundTripTests {

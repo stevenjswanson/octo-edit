@@ -42,6 +42,14 @@ public enum PackageReader {
                       sourceURL: resolveSource(parsed.project.source, package: package))
     }
 
+    /// words.tsv as it is on disk: what was spoken and when.
+    public static func loadWords(_ package: URL) throws -> [TimedWord] {
+        guard let text = try? String(contentsOf: package.appendingPathComponent(PackageLayout.words), encoding: .utf8) else {
+            throw ReadError.missing(PackageLayout.words)
+        }
+        do { return try WordsTSV.decode(text) } catch { throw ReadError.words("\(error)") }
+    }
+
     /// The face-track cache, if it has been built.
     public static func loadFaces(_ package: URL) -> FaceTracks? {
         (try? String(contentsOf: package.appendingPathComponent(PackageLayout.faces), encoding: .utf8)).flatMap(FacesFile.decode)
