@@ -22,7 +22,7 @@ struct OctoEdit: AsyncParsableCommand {
           3. octoedit render --check --json talk.octoedit
                validate; repeat 2–3 until "valid": true
           4. octoedit render talk.octoedit
-               export each clip to its own folder, talk.octoedit/exports/<slug>/,
+               export each clip to its own folder, talk.octoedit/exports/C<n>-<slug>/,
                as .mp4 video, .vtt captions, .timeline.json and .md notes
                (the timeline format: octoedit render --help)
 

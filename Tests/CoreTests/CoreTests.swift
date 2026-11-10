@@ -592,3 +592,30 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(p.clips == before)                          // markers stay on their words
     }
 }
+
+@Suite struct ExportNameTests {
+    func project(clips n: Int) -> Project {
+        var p = Project(source: "x.mp4")
+        p.paragraphs = [Paragraph(id: ParagraphID(1))]
+        p.words = (1...n).map { Word(id: WordID($0), text: "w\($0)", start: Double($0), end: Double($0) + 0.5, paragraph: ParagraphID(1)) }
+        p.clips = (1...n).map { k in
+            Clip(id: ClipID(k), name: k == 2 ? "Budget" : nil,
+                 segments: [Segment(inPoint: Boundary(word: WordID(k)), outPoint: Boundary(word: WordID(k)))])
+        }
+        return p
+    }
+
+    @Test func numberedInVideoOrderWithTwoDigitsAtLeast() {
+        let p = project(clips: 3)
+        #expect(p.exportName(of: ClipID(1)) == "C01-clip-01")
+        #expect(p.exportName(of: ClipID(2)) == "C02-budget")
+        #expect(p.exportName(of: ClipID(99)) == nil)
+    }
+
+    @Test func paddedToTheWidthOfTheLastNumber() {
+        let p = project(clips: 100)
+        #expect(p.exportName(of: ClipID(2)) == "C002-budget")
+        #expect(p.exportName(of: ClipID(100)) == "C100-clip-100")
+    }
+}
+

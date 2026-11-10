@@ -150,6 +150,16 @@ extension Project {
 
     public func slug(of clip: ClipID) -> String? { slugs()[clip] }
 
+    /// The name an exported clip's folder and files start with: `C<n>-<slug>`, where n
+    /// is the clip's place in the video, zero-padded to the same width for every clip
+    /// (at least two digits), so exports list in the order they occur. `C03-budget`.
+    public func exportName(of clip: ClipID) -> String? {
+        guard let n = clips.firstIndex(where: { $0.id == clip }), let slug = slug(of: clip) else { return nil }
+        let width = max(2, String(clips.count).count)
+        let number = String(n + 1)
+        return "C" + String(repeating: "0", count: width - number.count) + number + "-" + slug
+    }
+
     public func clip(withSlug slug: String) -> Clip? {
         let all = slugs()
         return clips.first { all[$0.id] == slug }

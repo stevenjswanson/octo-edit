@@ -136,14 +136,16 @@ public struct Renderer {
         try timeline.json().write(to: directory.appendingPathComponent(base + ".timeline.json"), atomically: true, encoding: .utf8)
     }
 
-    /// Renders one clip to `<exports>/<slug>/<slug>-4k.mp4` plus `<slug>-4k.vtt` captions,
-    /// `<slug>-4k.timeline.json` (speakers and cuts on the clip's clock) and
-    /// `<slug>-4k.md` notes (the label follows the output resolution), or for previews
-    /// just `<exports>/<slug>.preview.mp4`.
+    /// Renders one clip to `<exports>/<name>/<name>-4k.mp4` plus `<name>-4k.vtt` captions,
+    /// `<name>-4k.timeline.json` (speakers and cuts on the clip's clock) and
+    /// `<name>-4k.md` notes (the label follows the output resolution), or for previews
+    /// just `<exports>/<name>.preview.mp4`. `<name>` is the clip's numbered export name
+    /// (`C03-budget`, see `Project.exportName`), so exports sort in video order.
     public func render(_ clip: Clip, into exports: URL, options: Options,
                        progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Rendered {
         let slug = project.slug(of: clip.id)!
-        let directory = folder(exports, slug: slug, options)
+        let name = project.exportName(of: clip.id)!
+        let directory = folder(exports, slug: name, options)
         let segments = project.resolvedSegments(of: clip, sourceDuration: info.duration)
         guard !segments.isEmpty else { throw RenderError.emptyClip(slug) }
         let built = try await CompositionBuilder.build(asset: AVURLAsset(url: source), segments: segments,
@@ -151,7 +153,7 @@ public struct Renderer {
                                                        column: column(segments, options), speakerFade: project.settings.speakerFade, levels: levels([(clip, segments)]),
                                                        outputHeight: outputHeight(options))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = directory.appendingPathComponent(baseName(slug, options) + ".mp4")
+        let file = directory.appendingPathComponent(baseName(name, options) + ".mp4")
         let quality = quality(options)
         try await cleaningUp(directory) {
             try await ClipExporter.export(built, info: info, quality: quality, to: file, progress: progress)
@@ -161,10 +163,10 @@ public struct Renderer {
         if !options.preview {
             vtt = Captions.webVTT(for: clip, in: project, sourceRanges: built.sourceRanges, clipStarts: built.segmentStarts)
             timeline = Timeline.clip(clip, in: project, sourceRanges: built.sourceRanges, clipStarts: built.segmentStarts)
-            try write(timeline!, base: baseName(slug, options), in: directory)
-            try vtt!.write(to: directory.appendingPathComponent(baseName(slug, options) + ".vtt"), atomically: true, encoding: .utf8)
+            try write(timeline!, base: baseName(name, options), in: directory)
+            try vtt!.write(to: directory.appendingPathComponent(baseName(name, options) + ".vtt"), atomically: true, encoding: .utf8)
             try ExportNotes.clip(clip, in: project)
-                .write(to: directory.appendingPathComponent(baseName(slug, options) + ".md"), atomically: true, encoding: .utf8)
+                .write(to: directory.appendingPathComponent(baseName(name, options) + ".md"), atomically: true, encoding: .utf8)
         }
         let duration = built.sourceRanges.reduce(0) { $0 + $1.duration }
         return Rendered(slug: slug, name: clip.name, file: file, duration: duration, clips: [clip.id],

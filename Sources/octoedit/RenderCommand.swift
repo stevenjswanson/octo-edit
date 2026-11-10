@@ -9,17 +9,19 @@ struct RenderCommand: AsyncParsableCommand {
         commandName: "render",
         abstract: "Export the clips marked in a project's transcript.md.",
         discussion: """
-        Each clip gets its own folder, exports/<slug>/, holding <slug>-4k.mp4 (same
-        resolution and frame rate as the input, hardware-encoded; the label is the
-        resolution), <slug>-4k.vtt captions, <slug>-4k.timeline.json (see TIMELINE)
-        and <slug>-4k.md notes; --720p makes <slug>-720p.* in the same folder.
+        Each clip gets its own folder, exports/C<n>-<slug>/, holding C<n>-<slug>-4k.mp4
+        (same resolution and frame rate as the input, hardware-encoded; the label is
+        the resolution), .vtt captions, .timeline.json (see TIMELINE) and .md notes
+        with the same name; --720p makes C<n>-<slug>-720p.* in the same folder.
+        C<n> is the clip's place in the video (C01, C02, …; three digits from 100
+        clips), so exports list in video order. --clip still takes the bare slug.
         --supercut also joins the clips into one video in its own folder, whose .md
         has YouTube chapters.
         Use --check to validate transcript.md without rendering, and --preview for fast
-        720p <slug>.preview.mp4 versions in exports/preview/ (no folders, no sidecars).
+        720p C<n>-<slug>.preview.mp4 versions in exports/preview/ (no folders, no sidecars).
         With framing 9:16 (front matter `defaults: { framing: "9:16" }`, or --framing),
         clips are a full-height 9:16 column that follows whoever is speaking, named
-        <slug>-4k-9x16.*; build face tracks first with `octoedit faces`.
+        C<n>-<slug>-4k-9x16.*; build face tracks first with `octoedit faces`.
 
         TIMELINE
           <name>.timeline.json says who speaks when and where the cuts are, so other
@@ -61,7 +63,8 @@ struct RenderCommand: AsyncParsableCommand {
         After an export:
           {"folder": path, "files": [{"slug", "name", "video", "captions",
                                       "notes", "timeline", "duration"}]}
-          (each file's paths are inside folder/<slug>/, except previews)
+          (each file's paths are inside folder/C<n>-<slug>/, except previews;
+           "slug" is the bare slug, as --clip takes it)
         Exit code 1 if transcript.md has errors.
         """
     )
@@ -72,7 +75,7 @@ struct RenderCommand: AsyncParsableCommand {
     @Flag(help: "Only validate transcript.md and list the clips.")
     var check = false
 
-    @Flag(help: "Fast 720p H.264 <slug>.preview.mp4 files in exports/preview/ (no captions).")
+    @Flag(help: "Fast 720p H.264 C<n>-<slug>.preview.mp4 files in exports/preview/ (no captions).")
     var preview = false
 
     @Option(help: "Output codec (default: the project's, else same as the input).")

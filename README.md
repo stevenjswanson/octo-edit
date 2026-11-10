@@ -21,7 +21,7 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | `faces PKG` | Finds faces through the video into `cache/faces.tsv` (about ⅓ of the video's length for 4K), for 9:16 framing. `init` and `speakers` take `--faces` to do this too. |
 | `speakers PKG [--speakers "A, B"] [--faces]` | Finds who speaks when from the voices: every voice change starts a paragraph, and voices are named from the roster (or Speaker 1, 2, …). Resets every speaker name; markers stay on their words. Lists turns under a second to check. |
 | `replace-video --video V PKG [--faces]` | Points the project at another video of the same recording, e.g. the high-resolution original, which may start earlier or later (in the app: File ▸ Replace Video…). Transcribes V and compares the two transcriptions (and waveforms) to find how far apart the two clocks are. If that distance is steady, the old word timings are kept and moved by it, so cuts land where they did; if the two drift, word times come from the new transcription and clips whose length changed are listed to check. Text, clips, speakers and notes are untouched. Removes `cache/faces.tsv` (it was scanned from the old video); `--faces` rescans and says how the speakers with a face changed. |
-| `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--framing source\|9:16] [--dest DIR]` | Exports each clip into its own folder `exports/SLUG/`: `SLUG.mp4` (input resolution and frame rate, hardware-encoded) plus `SLUG.vtt` captions, `SLUG.timeline.json` (who speaks when and where the cuts are, on the clip's own clock) and a `notes.md`. `--check` only validates; `--preview` makes fast 720p `SLUG.preview.mp4` files in `exports/preview/`. |
+| `render PKG [--check] [--preview] [--clip SLUG]… [--codec …] [--framing source\|9:16] [--dest DIR]` | Exports each clip into its own folder `exports/C01-SLUG/`: `C01-SLUG-4k.mp4` (input resolution and frame rate, hardware-encoded) plus `.vtt` captions, `.timeline.json` (who speaks when and where the cuts are, on the clip's own clock) and `.md` notes of the same name. `C01` is the clip's place in the video, zero-padded (`C001` from 100 clips), so exports list in video order; `--clip` takes the bare slug. `--check` only validates; `--preview` makes fast 720p `C01-SLUG.preview.mp4` files in `exports/preview/`. |
 | `name PKG [--clip SLUG]… [--apply [--all]]` | Suggests titles with Apple's on-device model into the front matter. `--apply` names unnamed clips; `--all` renames every clip. |
 
 ## Marking up `transcript.md`
@@ -65,7 +65,7 @@ meeting.octoedit/
   *.vtt           the original Zoom transcript
   cache/          regenerable (waveform.bin, faces.tsv: face boxes, no fingerprints);
                   after replace-video, also words.before-replace.tsv (the old words.tsv)
-  exports/        rendered clips, one folder per clip (SLUG/); previews in preview/
+  exports/        rendered clips, one folder per clip (C01-SLUG/); previews in preview/
 ```
 
 The input video is referenced, never copied (relative path when it sits beside the package).

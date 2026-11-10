@@ -150,10 +150,10 @@ func samples(_ url: URL) async throws -> [Float] {
         defer { try? FileManager.default.removeItem(at: dir) }
         let r = try await Renderer(project: p, source: src)
         let out = try await r.render(p.clip(c)!, into: dir, options: .init())
-        #expect(out.file.lastPathComponent == "clip-01-1080p.mp4")
-        #expect(out.file.deletingLastPathComponent().lastPathComponent == "clip-01")     // the clip's own folder
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("clip-01/clip-01-1080p.vtt").path))
-        let timeline = try JSONDecoder().decode(Timeline.self, from: Data(contentsOf: dir.appendingPathComponent("clip-01/clip-01-1080p.timeline.json")))
+        #expect(out.file.lastPathComponent == "C01-clip-01-1080p.mp4")
+        #expect(out.file.deletingLastPathComponent().lastPathComponent == "C01-clip-01")     // the clip's own folder
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("C01-clip-01/C01-clip-01-1080p.vtt").path))
+        let timeline = try JSONDecoder().decode(Timeline.self, from: Data(contentsOf: dir.appendingPathComponent("C01-clip-01/C01-clip-01-1080p.timeline.json")))
         #expect(timeline.segments.count == 3)
 
         let asset = AVURLAsset(url: out.file)
@@ -222,13 +222,13 @@ func samples(_ url: URL) async throws -> [Float] {
         let r = try await Renderer(project: p, source: src)
         #expect(r.info.width == 3840 && r.info.codec == .hevc)
         let out = try await r.render(p.clip(c)!, into: dir, options: .init(preview: true))
-        #expect(out.file.lastPathComponent == "tone-test.preview.mp4")
+        #expect(out.file.lastPathComponent == "C01-tone-test.preview.mp4")
         #expect(out.file.deletingLastPathComponent().standardizedFileURL == dir.standardizedFileURL)   // previews stay flat
         let v = try await AVURLAsset(url: out.file).loadTracks(withMediaType: .video)[0]
         let (size, formats) = try await (v.load(.naturalSize), v.load(.formatDescriptions))
         #expect(size == CGSize(width: 1280, height: 720))
         #expect(CMFormatDescriptionGetMediaSubType(formats[0]) == kCMVideoCodecType_H264)
-        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("tone-test.preview.vtt").path))
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("C01-tone-test.preview.vtt").path))
     }
 
     /// 720p output: 1280×720 H.264, named -720p (captions too); full size is named 4k.
@@ -241,8 +241,8 @@ func samples(_ url: URL) async throws -> [Float] {
         let r = try await Renderer(project: p, source: src)
         #expect(r.resolutionLabel(.full) == "4k")
         let out = try await r.render(p.clip(c)!, into: dir, options: .init(resolution: .hd720))
-        #expect(out.file.lastPathComponent == "tone-test-720p.mp4")
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("tone-test/tone-test-720p.vtt").path))
+        #expect(out.file.lastPathComponent == "C01-tone-test-720p.mp4")
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("C01-tone-test/C01-tone-test-720p.vtt").path))
         let v = try await AVURLAsset(url: out.file).loadTracks(withMediaType: .video)[0]
         let (size, formats) = try await (v.load(.naturalSize), v.load(.formatDescriptions))
         #expect(size == CGSize(width: 1280, height: 720))
@@ -258,15 +258,15 @@ func samples(_ url: URL) async throws -> [Float] {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let r = try await Renderer(project: p, source: src)
-        for (options, name, size) in [(Renderer.Options(), "tone-test-4k-9x16.mp4", CGSize(width: 1216, height: 2160)),
-                                      (Renderer.Options(resolution: .hd720), "tone-test-720p-9x16.mp4", CGSize(width: 720, height: 1280))] {
+        for (options, name, size) in [(Renderer.Options(), "C01-tone-test-4k-9x16.mp4", CGSize(width: 1216, height: 2160)),
+                                      (Renderer.Options(resolution: .hd720), "C01-tone-test-720p-9x16.mp4", CGSize(width: 720, height: 1280))] {
             let out = try await r.render(p.clip(c)!, into: dir, options: options)
             #expect(out.file.lastPathComponent == name)
             let v = try await AVURLAsset(url: out.file).loadTracks(withMediaType: .video)[0]
             #expect(try await v.load(.naturalSize) == size)
         }
         let plain = try await r.render(p.clip(c)!, into: dir, options: .init(resolution: .hd720, framing: .source))
-        #expect(plain.file.lastPathComponent == "tone-test-720p.mp4")
+        #expect(plain.file.lastPathComponent == "C01-tone-test-720p.mp4")
     }
 
     @Test(.enabled(if: haveTone)) func cancellingLeavesNoFiles() async throws {
@@ -321,13 +321,13 @@ func samples(_ url: URL) async throws -> [Float] {
         let lines = vtt.components(separatedBy: "\n")
         let cueLine = try #require(lines.firstIndex { $0.contains("w5") })
         let start = try #require(Captions.parseStamp(lines[cueLine - 1].components(separatedBy: " --> ")[0]))
-        let inClip = try #require(Captions.parseStamp(try String(contentsOf: dir.appendingPathComponent("second/second-1080p.vtt"), encoding: .utf8)
+        let inClip = try #require(Captions.parseStamp(try String(contentsOf: dir.appendingPathComponent("C02-second/C02-second-1080p.vtt"), encoding: .utf8)
             .components(separatedBy: "\n").first { $0.contains(" --> ") }!.components(separatedBy: " --> ")[0]))
         #expect(abs(start - (ra.duration + inClip)) < 0.1, "\(start) vs \(ra.duration) + \(inClip)")
         let md = try String(contentsOf: dir.appendingPathComponent("talk-supercut/talk-supercut-1080p.md"), encoding: .utf8)
         #expect(md.contains("0:00 First\n0:0"))
         #expect(md.contains("Second"))
         #expect(md.contains("About the second."))
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("second/second-1080p.md").path))
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("C02-second/C02-second-1080p.md").path))
     }
 }
