@@ -39,7 +39,7 @@ Requires macOS 26 (on-device `SpeechAnalyzer`; Apple Intelligence for name sugge
 | Syntax | Meaning |
 |---|---|
 | `{clip "Name"}` … `{/clip}` | A clip. The name is optional; the output file is the name's slug (`budget-update`), or `clip-NN` when unnamed. |
-| `{clip "Name" levels}` | The clip with auto-levels: brightness, contrast and colour evened out as Photos' auto-enhance does, measured once over the clip and applied to every frame. In the app: the clip's **Auto levels** checkbox. |
+| `{clip "Name" nolevels}` | The clip without auto-levels. Clips have auto-levels by default: brightness, contrast and colour evened out as Photos' auto-enhance does, measured once over the clip and applied to every frame. In the app: the clip's **Auto levels** checkbox. (`levels`, written by older versions, means on.) |
 | `{clip … -120ms}`, `{/clip +250ms}` | Start 120 ms before the first word; end 250 ms after the last. Without an offset, the `pre`/`post` defaults apply. |
 | `~~words~~` | Omitted from the clip (a hard cut with a short audio crossfade). Omitted text that continues into the next paragraph is fenced again there; the pieces merge. |
 | `~~{+40ms} …` / `… {-60ms}~~` | Adjust the cut at an omission: `{+40ms}` just inside the opening `~~` keeps 40 ms after the word before it; `{-60ms}` just inside the closing `~~` resumes 60 ms before the word after it. Default 0 (word edges are already tightened to the speech). |

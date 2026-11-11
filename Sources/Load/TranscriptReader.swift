@@ -57,7 +57,7 @@ struct Reader {
     // Clip state
     struct PendingClip {
         var name: String?
-        var levels = false
+        var levels = true
         var openOffset: Seconds?
         var closeOffset: Seconds?
         var first: Int

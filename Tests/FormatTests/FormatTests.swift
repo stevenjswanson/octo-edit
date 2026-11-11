@@ -175,14 +175,15 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
     }
 
     @Test func autoLevelsRoundTripOnTheClipMarker() throws {
+        // On by default; `nolevels` turns it off; the old `levels` still reads as on.
         let text = handWritten.replacingOccurrences(of: "{clip \"Hiring plan\"}", with: "{clip \"Hiring plan\" levels}")
-            .replacingOccurrences(of: "{clip \"Welcome\" -200ms}", with: "{clip \"Welcome\" -200ms levels}")
+            .replacingOccurrences(of: "{clip \"Welcome\" -200ms}", with: "{clip \"Welcome\" -200ms nolevels}")
         let r = parse(text)
         #expect(r.issues.isEmpty)
-        #expect(r.project.clips.map(\.autoLevels) == [true, false, true])
+        #expect(r.project.clips.map(\.autoLevels) == [false, true, true])
         let out = TranscriptWriter.write(r.project)
-        #expect(out.contains("{clip \"Welcome\" -200ms levels}") && out.contains("{clip \"Hiring plan\" levels}[^hiring-plan]"))
-        #expect(!out.contains("FY27\" -120ms levels"))
+        #expect(out.contains("{clip \"Welcome\" -200ms nolevels}") && out.contains("{clip \"Hiring plan\"}[^hiring-plan]"))
+        #expect(!out.contains(" levels}"))
         let bad = parse("[00:00:01.0]\nHi {clip \"X\" sideways} there {/clip}\n")
         #expect(bad.issues.contains { $0.severity == .error })
     }

@@ -73,11 +73,12 @@ public enum Grammar {
 
     // MARK: Markers
 
-    public static func clipOpen(name: String?, offset: Seconds?, levels: Bool = false) -> String {
+    /// Auto levels is on unless the marker says `nolevels`.
+    public static func clipOpen(name: String?, offset: Seconds?, levels: Bool = true) -> String {
         var s = "{clip"
         if let name { s += " \"" + name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
         if let offset { s += " " + Self.offset(offset) }
-        if levels { s += " levels" }
+        if !levels { s += " nolevels" }
         return s + "}"
     }
 
@@ -189,10 +190,11 @@ public enum Lexer {
                 name = value
                 rest = rest[rest.index(after: k)...].drop { $0 == " " }
             }
-            // Then an optional offset and an optional `levels`, in that order.
+            // Then an optional offset and an optional `nolevels` (auto levels off), in that
+            // order. `levels` (on, the default; written by older versions) is accepted too.
             var parts = rest.split(separator: " ")
-            let levels = parts.last == "levels"
-            if levels { parts.removeLast() }
+            let levels = parts.last != "nolevels"
+            if parts.last == "levels" || parts.last == "nolevels" { parts.removeLast() }
             if parts.isEmpty { return .clipOpen(name: name, offset: nil, levels: levels) }
             if parts.count == 1, let o = Grammar.parseMilliseconds(parts[0]) { return .clipOpen(name: name, offset: o, levels: levels) }
             return .invalid("{\(body)}")

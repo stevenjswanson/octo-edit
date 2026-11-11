@@ -95,11 +95,11 @@ public struct Clip: Equatable, Sendable {
     public var suggestions: [String]
     public var segments: [Segment]
     /// Auto-levels: stretch the clip's tones and colours to a full range, in preview
-    /// and export (`{clip … levels}`).
+    /// and export. On unless the marker says `{clip … nolevels}`.
     public var autoLevels: Bool
 
     public init(id: ClipID, name: String? = nil, notes: String = "", suggestions: [String] = [],
-                segments: [Segment], autoLevels: Bool = false) {
+                segments: [Segment], autoLevels: Bool = true) {
         self.id = id
         self.name = name
         self.notes = notes
