@@ -500,7 +500,12 @@ final class DocumentModel {
     func makeClip() {
         guard let s = selection else { return }
         var id: ClipID?
-        if perform("New Clip", { id = try $0.makeClip(words: s) }), let id {
+        // New clips start with Auto levels on (the clip panel's switch turns it off).
+        if perform("New Clip", { p in
+            let made = try p.makeClip(words: s)
+            try p.setAutoLevels(clip: made, true)
+            id = made
+        }), let id {
             selection = nil
             select(clip: id)
         }

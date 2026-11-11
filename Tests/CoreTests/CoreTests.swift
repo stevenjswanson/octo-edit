@@ -370,6 +370,13 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(a.name == "Whole" && a.notes == "Notes" && b.name == nil)
     }
 
+    @Test func bothPartsKeepAutoLevels() throws {
+        var (p, id) = try project()
+        try p.setAutoLevels(clip: id, true)
+        let second = try p.splitClip(id, atWord: 9)
+        #expect(p.clip(id)!.autoLevels && p.clip(second)!.autoLevels)
+    }
+
     @Test func splittingInsideAnOmissionLeavesItBetweenTheClips() throws {
         var (p, id) = try project()
         let second = try p.splitClip(id, atWord: 6)       // inside the omitted 5…6
