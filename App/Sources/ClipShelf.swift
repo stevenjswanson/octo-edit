@@ -53,18 +53,19 @@ struct ClipShelf: View {
                 .padding(.leading, 12)
             }
             let stale = model.needsExport.count
-            Button { model.reexportChanged() } label: {
-                Label(stale > 0 ? "Re-export \(stale) Changed" : "Re-export Changed", systemImage: "arrow.clockwise")
+            VStack(alignment: .leading, spacing: 8) {
+                Button { model.showExport() } label: {
+                    Label("Export…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(project.clips.isEmpty || model.loadErrors || model.sourceMissing)
+                .help("Export clips (⇧⌘E)")
+                Button { model.reexportChanged() } label: {
+                    Label(stale > 0 ? "Re-export \(stale) Changed" : "Re-export Changed", systemImage: "arrow.clockwise")
+                }
+                .disabled(stale == 0 || model.loadErrors || model.sourceMissing || model.exporter.isExporting)
+                .help(stale > 0 ? "Export again every clip marked as changed since its export, with the current settings"
+                                : "No clip has changed since it was exported")
             }
-            .disabled(stale == 0 || model.loadErrors || model.sourceMissing || model.exporter.isExporting)
-            .help(stale > 0 ? "Export again every clip marked as changed since its export, with the current settings"
-                            : "No clip has changed since it was exported")
-            .padding(.leading, 12)
-                        Button { model.showExport() } label: {
-                Label("Export…", systemImage: "square.and.arrow.up")
-            }
-            .disabled(project.clips.isEmpty || model.loadErrors || model.sourceMissing)
-            .help("Export clips (⇧⌘E)")
             .padding(.horizontal, 12)
         }
         .background(Color(nsColor: .windowBackgroundColor))
