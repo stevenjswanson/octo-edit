@@ -84,6 +84,7 @@ struct ClipShelf: View {
                 }
                 .frame(width: 128, height: 72)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
+                .opacity(clip.export ? 1 : 0.4)   // left out of exports
                 Text(Self.duration(duration))
                     .font(.caption2.monospacedDigit()).foregroundStyle(.white)
                     .padding(.horizontal, 4).padding(.vertical, 1)
@@ -112,6 +113,11 @@ struct ClipShelf: View {
             }
             Text("\(n + 1)  \(clip.name ?? "Unnamed")").font(.caption.weight(.medium)).lineLimit(1)
             Text(slug).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Toggle("Export", isOn: Binding(get: { clip.export }, set: { model.setExport(clip.id, $0) }))
+                .toggleStyle(.checkbox).controlSize(.mini).font(.caption2)
+                .disabled(!model.canEdit)
+                .help(clip.export ? "Included when exporting. Uncheck to leave this clip out of exports until you check it again."
+                                  : "Left out of exports and Re-export Changed. Check to include it again.")
         }
         .frame(width: 128)
         .padding(5)

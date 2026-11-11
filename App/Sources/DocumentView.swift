@@ -36,7 +36,7 @@ struct DocumentView: View {
             .frame(minHeight: 200, idealHeight: 380)
 
             ClipShelf(model: model)
-                .frame(minHeight: 120, idealHeight: 128, maxHeight: 160)
+                .frame(minHeight: 140, idealHeight: 148, maxHeight: 180)
         }
         .sheet(isPresented: Binding(get: { model.identifyRequest }, set: { model.identifyRequest = $0 })) {
             IdentifySpeakersSheet(model: model)

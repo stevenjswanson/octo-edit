@@ -97,15 +97,19 @@ public struct Clip: Equatable, Sendable {
     /// Auto-levels: stretch the clip's tones and colours to a full range, in preview
     /// and export. On unless the marker says `{clip … nolevels}`.
     public var autoLevels: Bool
+    /// Included when exporting (the shelf's Export checkbox). Off (`{clip … noexport}`)
+    /// keeps the clip out of exports and supercuts until it is turned back on.
+    public var export: Bool
 
     public init(id: ClipID, name: String? = nil, notes: String = "", suggestions: [String] = [],
-                segments: [Segment], autoLevels: Bool = true) {
+                segments: [Segment], autoLevels: Bool = true, export: Bool = true) {
         self.id = id
         self.name = name
         self.notes = notes
         self.suggestions = suggestions
         self.segments = segments
         self.autoLevels = autoLevels
+        self.export = export
     }
 }
 

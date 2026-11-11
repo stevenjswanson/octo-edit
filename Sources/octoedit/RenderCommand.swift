@@ -15,6 +15,8 @@ struct RenderCommand: AsyncParsableCommand {
         with the same name; --720p makes C<n>-<slug>-720p.* in the same folder.
         C<n> is the clip's place in the video (C01, C02, …; three digits from 100
         clips), so exports list in video order. --clip still takes the bare slug.
+        Clips marked {clip … noexport} (the app's unchecked Export box) are skipped
+        unless named with --clip.
         --supercut also joins the clips into one video in its own folder, whose .md
         has YouTube chapters.
         Use --check to validate transcript.md without rendering, and --preview for fast
@@ -117,7 +119,8 @@ struct RenderCommand: AsyncParsableCommand {
         if loaded.hasErrors { throw ExitCode.failure }
 
         let slugs = p.slugs()
-        var selected = p.clips
+        // Clips marked `noexport` are skipped unless asked for by name.
+        var selected = p.clips.filter(\.export)
         if !clips.isEmpty {
             let unknown = clips.filter { s in !p.clips.contains { slugs[$0.id] == s } }
             if !unknown.isEmpty {
@@ -128,7 +131,8 @@ struct RenderCommand: AsyncParsableCommand {
         }
         if selected.isEmpty {
             if json { JSONReport.emit(JSONReport.Export(folder: nil, files: [])) }
-            Console.note("No clips are marked yet. Add {clip \"Name\"} … {/clip} around text in transcript.md.")
+            Console.note(p.clips.isEmpty ? "No clips are marked yet. Add {clip \"Name\"} … {/clip} around text in transcript.md."
+                                         : "Every clip is marked noexport; name one with --clip to export it anyway.")
             return
         }
 

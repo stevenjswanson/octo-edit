@@ -70,7 +70,7 @@ final class ExportModel {
         guard !isExporting else { return }
         let slugs = project.slugs()
         rows = project.clips.map { c in
-            Row(id: c.id, include: !onlySelected || c.id == selected, title: c.name ?? "Unnamed",
+            Row(id: c.id, include: onlySelected ? c.id == selected : c.export, title: c.name ?? "Unnamed",
                 slug: slugs[c.id] ?? "", duration: project.duration(of: c))
         }
         codec = project.settings.codec

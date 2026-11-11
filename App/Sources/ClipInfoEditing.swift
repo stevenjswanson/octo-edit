@@ -91,6 +91,12 @@ extension DocumentModel {
         showingExport = true
     }
 
+    /// The shelf's Export checkbox: unchecked clips stay out of exports (saved as `noexport`).
+    func setExport(_ id: ClipID, _ on: Bool) {
+        guard project.clip(id)?.export != on else { return }
+        perform(on ? "Include in Export" : "Leave Out of Export") { try $0.setExport(clip: id, on) }
+    }
+
     /// Shelf ▸ Re-export: export this clip again, as last time, with only a progress sheet.
     func reexportClip(_ id: ClipID) { reexport([id]) }
 

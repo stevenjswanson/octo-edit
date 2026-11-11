@@ -73,12 +73,14 @@ public enum Grammar {
 
     // MARK: Markers
 
-    /// Auto levels is on unless the marker says `nolevels`.
-    public static func clipOpen(name: String?, offset: Seconds?, levels: Bool = true) -> String {
+    /// Auto levels is on unless the marker says `nolevels`; the clip is exported unless
+    /// it says `noexport`.
+    public static func clipOpen(name: String?, offset: Seconds?, levels: Bool = true, export: Bool = true) -> String {
         var s = "{clip"
         if let name { s += " \"" + name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
         if let offset { s += " " + Self.offset(offset) }
         if !levels { s += " nolevels" }
+        if !export { s += " noexport" }
         return s + "}"
     }
 
@@ -94,7 +96,7 @@ public enum Grammar {
 /// Body-text tokens of transcript.md.
 public enum Token: Equatable, Sendable {
     case word(String)
-    case clipOpen(name: String?, offset: Seconds?, levels: Bool)
+    case clipOpen(name: String?, offset: Seconds?, levels: Bool, export: Bool)
     case clipClose(offset: Seconds?)
     case fence
     case offset(Seconds)
@@ -190,13 +192,18 @@ public enum Lexer {
                 name = value
                 rest = rest[rest.index(after: k)...].drop { $0 == " " }
             }
-            // Then an optional offset and an optional `nolevels` (auto levels off), in that
-            // order. `levels` (on, the default; written by older versions) is accepted too.
+            // Then an optional offset, then flags in any order: `nolevels` (auto levels
+            // off), `noexport` (left out of exports), and `levels` (on, the default;
+            // written by older versions).
             var parts = rest.split(separator: " ")
-            let levels = parts.last != "nolevels"
-            if parts.last == "levels" || parts.last == "nolevels" { parts.removeLast() }
-            if parts.isEmpty { return .clipOpen(name: name, offset: nil, levels: levels) }
-            if parts.count == 1, let o = Grammar.parseMilliseconds(parts[0]) { return .clipOpen(name: name, offset: o, levels: levels) }
+            var levels = true, export = true
+            while let flag = parts.last, ["levels", "nolevels", "noexport"].contains(flag) {
+                if flag == "nolevels" { levels = false }
+                if flag == "noexport" { export = false }
+                parts.removeLast()
+            }
+            if parts.isEmpty { return .clipOpen(name: name, offset: nil, levels: levels, export: export) }
+            if parts.count == 1, let o = Grammar.parseMilliseconds(parts[0]) { return .clipOpen(name: name, offset: o, levels: levels, export: export) }
             return .invalid("{\(body)}")
         }
         if let o = Grammar.parseMilliseconds(text), text.first == "+" || text.first == "-" {

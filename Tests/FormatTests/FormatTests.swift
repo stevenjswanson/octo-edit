@@ -184,6 +184,12 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         let out = TranscriptWriter.write(r.project)
         #expect(out.contains("{clip \"Welcome\" -200ms nolevels}") && out.contains("{clip \"Hiring plan\"}[^hiring-plan]"))
         #expect(!out.contains(" levels}"))
+        // noexport: flags after the offset, in any order; written after nolevels.
+        let flagged = parse(text.replacingOccurrences(of: "-200ms nolevels}", with: "-200ms noexport nolevels}"))
+        #expect(flagged.issues.isEmpty)
+        #expect(flagged.project.clips.map(\.export) == [false, true, true])
+        #expect(flagged.project.clips[0].autoLevels == false)
+        #expect(TranscriptWriter.write(flagged.project).contains("{clip \"Welcome\" -200ms nolevels noexport}"))
         let bad = parse("[00:00:01.0]\nHi {clip \"X\" sideways} there {/clip}\n")
         #expect(bad.issues.contains { $0.severity == .error })
     }

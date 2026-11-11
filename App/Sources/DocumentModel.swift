@@ -241,7 +241,7 @@ final class DocumentModel {
         let states = ExportStamp.states(project, exports: folder, sourceIdentity: ExportStamp.sourceIdentity(source))
         let anyExported = states.values.contains { $0 != .notExported }
         var out: [ClipID: String] = [:]
-        for (id, state) in states {
+        for (id, state) in states where project.clip(id)?.export != false {
             switch state {
             case .current: break
             case .changed: out[id] = "Changed since it was exported"

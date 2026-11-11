@@ -377,6 +377,15 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(p.clip(id)!.autoLevels && p.clip(second)!.autoLevels)
     }
 
+    @Test func bothPartsKeepTheExportSetting() throws {
+        var (p, id) = try project()
+        try p.setExport(clip: id, false)
+        let second = try p.splitClip(id, atWord: 9)
+        #expect(!p.clip(id)!.export && !p.clip(second)!.export)
+        try p.mergeClips([id, second])
+        #expect(!p.clips[0].export)
+    }
+
     @Test func splittingInsideAnOmissionLeavesItBetweenTheClips() throws {
         var (p, id) = try project()
         let second = try p.splitClip(id, atWord: 6)       // inside the omitted 5…6
