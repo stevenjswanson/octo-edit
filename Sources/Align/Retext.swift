@@ -11,11 +11,13 @@ extension Project {
     /// - A clip or omission edge on a removed word moves to the nearest word on its
     ///   side; segments that collapse are dropped, and an omission whose words were
     ///   all removed disappears (inside a clip or outside one).
+    /// - No tokens deletes the paragraph: its header and words go, and edges on them move
+    ///   to the neighbouring paragraphs. The last paragraph can't be deleted.
     public mutating func replaceText(ofParagraph pid: ParagraphID, with tokens: [String]) throws {
-        guard !tokens.isEmpty else { throw EditError.emptyParagraph }
         guard let lo = words.firstIndex(where: { $0.paragraph == pid }) else { throw EditError.invalidRange }
         var hi = lo
         while hi + 1 < words.count, words[hi + 1].paragraph == pid { hi += 1 }
+        guard !tokens.isEmpty || lo > 0 || hi + 1 < words.count else { throw EditError.emptyParagraph }
         let old = Array(words[lo...hi])
         guard old.map(\.text) != tokens else { return }
         let map = omissionMap()
@@ -50,8 +52,9 @@ extension Project {
         // the first surviving word after it. An edge never crosses a surviving word: if
         // nothing is left on its side within the paragraph it moves into the neighbouring
         // paragraph (or the segment is dropped).
-        let wordBefore = lo > 0 ? words[lo - 1].id : nil
-        let wordAfter = hi + 1 < words.count ? words[hi + 1].id : nil
+        let zoomOnly = Set(paragraphs.filter(\.zoomOnly).map(\.id))
+        let wordBefore = words[..<lo].last { !zoomOnly.contains($0.paragraph) }?.id
+        let wordAfter = words[(hi + 1)...].first { !zoomOnly.contains($0.paragraph) }?.id
         let oldIndex = Dictionary(uniqueKeysWithValues: old.enumerated().map { ($1.id, $0) })
         func remap(_ b: Boundary, inPoint: Bool) -> Boundary? {
             guard let i = oldIndex[b.word] else { return b }
@@ -82,6 +85,7 @@ extension Project {
         var all = words
         all.replaceSubrange(lo...hi, with: replacement)
         words = all
+        if tokens.isEmpty { paragraphs.removeAll { $0.id == pid } }
 
         // Drop collapsed segments; merge segments whose omission vanished; drop empty clips.
         for c in clips.indices {

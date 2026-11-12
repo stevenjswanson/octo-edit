@@ -23,7 +23,7 @@ public enum EditError: Error, Equatable, CustomStringConvertible {
         case .zoomOnlyText: "clip boundaries and omissions can't be placed in Zoom-only text (it isn't in the recording)"
         case .notSplittable: "the paragraph can't be split there"
         case .notConsecutive: "only consecutive clips (with no other clip between them) can be merged"
-        case .emptyParagraph: "a paragraph can't be left empty (omit its words instead)"
+        case .emptyParagraph: "the transcript's last paragraph can't be deleted"
         case .differentSpeakers: "paragraphs with different speakers can't be merged (assign the words to a speaker instead)"
         case .speakerInUse(let name): "\(name) still has paragraphs; assign them to someone else first"
         }

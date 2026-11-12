@@ -334,13 +334,13 @@ final class DocumentModel {
     }
 
     /// Ends the text session, applying every changed paragraph as one undo step.
-    /// A paragraph emptied of words keeps the session open (with a message).
+    /// A paragraph emptied of words is deleted; emptying every one keeps the session
+    /// open (with a message).
     func endTextEditing() {
         guard textEditing else { return }
         let edits = textProvider?() ?? []
-        if let empty = edits.first(where: { $0.1.isEmpty }) {
-            _ = empty
-            flash("A paragraph can’t be left empty — put a word back (omit words to cut them).")
+        if !edits.isEmpty, edits.allSatisfy({ $0.1.isEmpty }) {
+            flash("The transcript can’t be left empty — put a word back.")
             NSSound.beep()
             return
         }
@@ -358,8 +358,9 @@ final class DocumentModel {
     }
 
     /// ⌥⌫ in cut mode: removes words from the transcript text, exactly as deleting them
-    /// in text-edit mode would (clips and omissions keep their places). Playback carries
-    /// on: only the text changes, so the video doesn't.
+    /// in text-edit mode would (clips and omissions keep their places; a paragraph left
+    /// with no words is deleted). Playback carries on: only the text changes, so the
+    /// video doesn't.
     func deleteWords(_ r: ClosedRange<Int>) {
         guard !textEditing, r.upperBound < project.words.count else { return }
         var edits: [(ParagraphID, [String])] = []
@@ -368,11 +369,6 @@ final class DocumentModel {
             let tokens = project.words.indices
                 .filter { project.words[$0].paragraph == pid && !r.contains($0) }
                 .map { project.words[$0].text }
-            guard !tokens.isEmpty else {
-                flash("A paragraph can’t be left empty — omit its words to cut them.")
-                NSSound.beep()
-                return
-            }
             edits.append((pid, tokens))
         }
         selection = nil

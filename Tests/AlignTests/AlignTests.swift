@@ -113,9 +113,48 @@ func toks(_ s: String) -> [String] { s.split(separator: " ").map { Aligner.norma
         #expect(p.omissions.map { p.indexRange(of: $0)! } == [5...5])
     }
 
-    @Test func emptyParagraphIsRefused() throws {
+    @Test func theLastParagraphCantBeDeleted() throws {
         var (p, _) = try project()
         #expect(throws: EditError.emptyParagraph) { try p.replaceText(ofParagraph: ParagraphID(1), with: []) }
+    }
+
+    /// Three paragraphs a b c | d e f | g h i, one clip from b to h with e omitted.
+    func threeParagraphs() throws -> (Project, ClipID) {
+        let texts = ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+        let words = texts.enumerated().map { i, t in
+            Word(id: WordID(i + 1), text: t, start: Double(i), end: Double(i) + 0.8, paragraph: ParagraphID(i / 3 + 1))
+        }
+        var p = Project(source: "x", paragraphs: (1...3).map { Paragraph(id: ParagraphID($0)) }, words: words)
+        let id = try p.makeClip(words: 1...7)
+        try p.omit(words: 4...4, in: id)
+        return (p, id)
+    }
+
+    @Test func emptyingAParagraphDeletesIt() throws {
+        var (p, id) = try threeParagraphs()
+        try p.replaceText(ofParagraph: ParagraphID(2), with: [])
+        #expect(p.paragraphs.map(\.id) == [ParagraphID(1), ParagraphID(3)])
+        #expect(p.words.map(\.text) == ["a", "b", "c", "g", "h", "i"])
+        // The omission went with its words; the clip now runs b…h in one piece.
+        #expect(p.clip(id)!.segments.map { p.indexRange(of: $0)! } == [1...4])
+    }
+
+    @Test func deletingTheParagraphAClipStartsInMovesItsStart() throws {
+        var (p, id) = try threeParagraphs()
+        try p.replaceText(ofParagraph: ParagraphID(1), with: [])
+        #expect(p.words.first!.text == "d")
+        #expect(p.indexRange(of: p.clip(id)!) == 0...4)          // starts at d now
+        var (q, qid) = try threeParagraphs()
+        try q.replaceText(ofParagraph: ParagraphID(3), with: [])
+        #expect(q.indexRange(of: q.clip(qid)!) == 1...5)        // ends at f now
+    }
+
+    @Test func aClipInsideADeletedParagraphGoes() throws {
+        var (p, _) = try threeParagraphs()
+        try p.deleteClip(p.clips[0].id)
+        let id = try p.makeClip(words: 3...5)
+        try p.replaceText(ofParagraph: ParagraphID(2), with: [])
+        #expect(p.clip(id) == nil && p.clips.isEmpty)
     }
 }
 
