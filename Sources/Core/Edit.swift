@@ -151,6 +151,7 @@ extension Project {
         merged.notes = parts.map(\.clip.notes).filter { !$0.isEmpty }.joined(separator: "\n\n")
         merged.suggestions = []
         merged.export = parts.contains { $0.clip.export }
+        merged.still = parts.lazy.compactMap(\.clip.still).first
         all.replaceSubrange(indices.first!...indices.last!, with: [
             Span(clip: merged, range: parts.first!.range.lowerBound...parts.last!.range.upperBound,
                  start: parts.first!.start, end: parts.last!.end),
@@ -164,7 +165,8 @@ extension Project {
     /// omission that `w` falls inside or next to ends up between the two clips. The
     /// original start and end keep their offsets; the two new edges get the default
     /// pads. The first part keeps the name, notes and suggestions; the second is unnamed.
-    /// Both keep the clip's auto-levels and export settings.
+    /// Both keep the clip's auto-levels and export settings; the first keeps its chosen
+    /// still, and the second's is picked automatically.
     /// Returns the second clip's id.
     @discardableResult
     public mutating func splitClip(_ id: ClipID, atWord w: Int) throws -> ClipID {
@@ -312,6 +314,11 @@ extension Project {
 
     public mutating func setExport(clip id: ClipID, _ on: Bool) throws {
         clips[try clipIndex(id)].export = on
+    }
+
+    /// The title card's still, as a source time; `nil` goes back to the automatic pick.
+    public mutating func setStill(clip id: ClipID, _ time: Seconds?) throws {
+        clips[try clipIndex(id)].still = time.map { max($0, 0) }
     }
 
     public mutating func setNotes(clip id: ClipID, _ notes: String) throws {

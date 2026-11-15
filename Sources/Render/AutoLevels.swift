@@ -62,7 +62,7 @@ public struct AutoLevels: Equatable, Sendable {
         }
     }
 
-    func apply(_ image: CIImage) -> CIImage {
+    public func apply(_ image: CIImage) -> CIImage {
         var out = image
         for f in filters {
             var params: [String: Any] = f.numbers.mapValues { NSNumber(value: $0) }

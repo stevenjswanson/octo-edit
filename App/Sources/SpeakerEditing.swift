@@ -251,14 +251,15 @@ struct IdentifySpeakersSheet: View {
 // MARK: Faces
 
 extension DocumentModel {
-    /// Reads cache/faces.tsv off the main thread; when it's missing and the project has
-    /// speakers, finds faces in the background (about a third of the video's length).
+    /// Reads cache/faces.tsv off the main thread; when it's missing, finds faces in the
+    /// background (about a third of the video's length) unless the project says
+    /// `faces: off`.
     func loadFaces() {
         guard let package = packageURL else { return }
         Task.detached(priority: .utility) {
             let loaded = PackageReader.loadFaces(package)
             await MainActor.run {
-                if let loaded { self.faces = loaded; self.refreshPreviewNow() } else if !self.project.speakersInOrder().isEmpty { self.findFaces() }
+                if let loaded { self.faces = loaded; self.refreshPreviewNow() } else if self.project.settings.findFaces { self.findFaces() }
             }
         }
     }
@@ -284,6 +285,12 @@ extension DocumentModel {
 
     func setFraming(_ framing: Framing) {
         perform("Framing") { $0.settings.framing = framing }
+    }
+
+    /// Export sheet ▸ Configure Export Hook…: the program run on each exported clip (nil: none).
+    func setPostExport(_ command: PostExport?) {
+        guard command != project.settings.postExport else { return }
+        perform(command == nil ? "Remove Export Hook" : "Export Hook") { $0.settings.postExport = command }
     }
 
     func setSpeakerFade(_ seconds: Double) {

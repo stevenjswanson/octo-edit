@@ -55,6 +55,11 @@ public enum PackageReader {
         (try? String(contentsOf: package.appendingPathComponent(PackageLayout.faces), encoding: .utf8)).flatMap(FacesFile.decode)
     }
 
+    /// The title-card still scores already worked out (cache/stills.tsv); empty if none.
+    public static func loadStillScores(_ package: URL) -> [StillScore] {
+        (try? String(contentsOf: package.appendingPathComponent(PackageLayout.stills), encoding: .utf8)).flatMap(StillsFile.decode) ?? []
+    }
+
     public static func resolveSource(_ source: String, package: URL) -> URL {
         if source.hasPrefix("/") { return URL(fileURLWithPath: source) }
         if source.hasPrefix("~") { return URL(fileURLWithPath: (source as NSString).expandingTildeInPath) }

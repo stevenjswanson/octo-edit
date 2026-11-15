@@ -3,6 +3,8 @@ import ArgumentParser
 import Core
 import Load
 import Render
+import FaceTrack
+import SpeakerFraming
 
 struct RenderCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -45,10 +47,46 @@ struct RenderCommand: AsyncParsableCommand {
                                           consecutive kept words by one speaker; a
                                           turn may span a cut, and a new one starts
                                           at each change of speaker or of clip
-           "words": [{"start", "end", "speaker", "segment", "text"}]}
+           "words": [{"start", "end", "speaker", "segment", "text"}],
                                           each kept word; segment indexes segments
+           "titlecard": {"time", "auto", "image"}}
+                                          single clips with a face found (needs
+                                          cache/faces.tsv): the title card's still,
+                                          time on the input's clock, auto = picked
+                                          automatically (no still= on the clip),
+                                          image = <name>.still.jpg beside it, that
+                                          frame framed like the video (see
+                                          `octoedit stills --help`)
           speaker is null for words with no speaker. Words typed by hand (never
           spoken, so untimed) are left out, as in the captions.
+
+        POST-EXPORT
+          A project can name a program that turns each plain export into the real one
+          (the seminar's clips are branded this way), in the front matter:
+          post-export: { run: ~/bin/brand-clip, args: ["{timeline}", -o, "{output}"] }
+          (`post-export: ~/tools/brand-clip` alone means those args). The app's Export
+          sheet sets it too (Configure Export Hook…). Then, unless --no-post-export:
+          - Each clip is first exported into exports/C<n>-<slug>/.unbranded/ (the .mp4
+            and its .timeline.json, .vtt and .md, named as usual).
+          - As soon as a clip is encoded, the program runs on it, while the next clip
+            encodes; one program runs at a time, in clip order, then once for the
+            supercut (joined from the plain clips). Never for --preview.
+          - run is a path: absolute, ~/…, or relative to the package. It is started
+            directly (no shell), in the package folder. Placeholders in args:
+              {timeline}  the plain export's .timeline.json (.mp4/.vtt/.md beside it)
+              {video}     the plain export's .mp4
+              {output}    the .mp4 to write (a hidden partial name; required)
+              {exports}   the export folder
+            Environment: OCTOEDIT_PROJECT, OCTOEDIT_EXPORTS, OCTOEDIT_FRAMING (source
+            or 9:16), OCTOEDIT_QUALITY (full or 720p), OCTOEDIT_SLUG, and
+            OCTOEDIT_SUPERCUT=1 for the supercut; PATH gains /opt/homebrew/bin and
+            /usr/local/bin. stdout and stderr are shown to the user.
+          - Exit 0 having written {output}: it becomes C<n>-<slug>-4k.mp4 (the usual
+            name), the sidecars are copied beside it, and .unbranded/ is removed after
+            the run. Anything else fails that clip: nothing appears under the final
+            name (an older export there is kept), .unbranded/ stays for a look, and
+            render exits 1.
+          - Ctrl-C (or Cancel in the app) sends SIGTERM; {output} is removed.
 
         EXAMPLES
           octoedit render --check seminar.octoedit           validate; list the clips
@@ -64,10 +102,13 @@ struct RenderCommand: AsyncParsableCommand {
                       "firstWords", "lastWords"}]}
         After an export:
           {"folder": path, "files": [{"slug", "name", "video", "captions",
-                                      "notes", "timeline", "duration"}]}
+                                      "notes", "timeline", "duration",
+                                      "postExport", "postExportOutput"}]}
           (each file's paths are inside folder/C<n>-<slug>/, except previews;
-           "slug" is the bare slug, as --clip takes it)
-        Exit code 1 if transcript.md has errors.
+           "slug" is the bare slug, as --clip takes it; "postExport" is "done",
+           "failed" or "skipped" when the project has a post-export program, with
+           the program's output in "postExportOutput" when it failed)
+        Exit code 1 if transcript.md has errors or a post-export step failed.
         """
     )
 
@@ -100,6 +141,9 @@ struct RenderCommand: AsyncParsableCommand {
 
     @Flag(help: "Print results as one JSON object on stdout (see below).")
     var json = false
+
+    @Flag(help: "Skip the project's post-export program (see POST-EXPORT): plain exports.")
+    var noPostExport = false
 
     func run() async throws {
         let pkg = URL(cliPath: package)
@@ -148,50 +192,100 @@ struct RenderCommand: AsyncParsableCommand {
             return
         }
 
-        let options = Renderer.Options(codec: codec, preview: preview, resolution: hd720 ? .hd720 : .full, framing: framing)
+        let postExport = preview || noPostExport ? nil : p.settings.postExport
+        if let postExport, let problem = PostExportRunner.problem(postExport, package: pkg) {
+            throw ValidationError("post-export: \(problem). Fix `post-export:` in transcript.md, or add --no-post-export.")
+        }
+        let options = Renderer.Options(codec: codec, preview: preview, resolution: hd720 ? .hd720 : .full, framing: framing,
+                                       postExport: postExport)
         var faces: FaceTracks?
         if (framing ?? p.settings.framing) == .portrait {
             faces = PackageReader.loadFaces(pkg)
             if faces == nil { Console.note("No face tracks yet, so the 9:16 column stays centred. Run `octoedit faces` first.") }
         }
-        let renderer = try await Renderer(project: p, source: loaded.sourceURL, faces: faces)
+        // Title-card stills need the face tracks (in either framing); not for previews.
+        let stills = preview ? nil : (faces ?? PackageReader.loadFaces(pkg)).map {
+            TitleStills(video: loaded.sourceURL, faces: $0, project: p, scorer: VisionStillScorer(),
+                        scores: PackageReader.loadStillScores(pkg))
+        }
+        let renderer = try await Renderer(project: p, source: loaded.sourceURL, faces: faces, stills: stills)
         let outDir = dest.map(URL.init(cliPath:)) ?? pkg.appendingPathComponent(preview ? "exports/preview" : "exports")
-        let preview = preview
         let supercut = supercut
         let json = json
+        let context = postExport.map {
+            PostExportRunner.Context(command: $0, package: pkg, exports: outDir, framing: renderer.framing(options),
+                                     resolution: options.resolution)
+        }
+        let lane = SerialLane()
 
-        let work = Task { () -> [Renderer.Rendered] in
-            var done: [Renderer.Rendered] = []
+        let work = Task { () -> [JSONReport.Outcome] in
+            var staged: [Renderer.Rendered] = []
+            var finishing: [(Renderer.Rendered, Task<Renderer.Rendered, Error>?)] = []
+            // The post-export step for one staged file, queued behind the others.
+            func finish(_ r: Renderer.Rendered, supercut: Bool = false) async -> Task<Renderer.Rendered, Error>? {
+                guard let context else { return nil }
+                let name = context.command.name
+                return await lane.submit {
+                    Console.note("\(name): \(r.file.lastPathComponent)")
+                    let done = try await PostExportRunner.run(r, context, supercut: supercut) { Console.note("  \(name): \($0)") }
+                    if !json { print(done.file.path) }
+                    return done
+                }
+            }
             for (n, clip) in selected.enumerated() {
                 let label = "[\(n + 1)/\(selected.count)] \(slugs[clip.id]!)"
                 let r = try await renderer.render(clip, into: outDir, options: options) { Console.progress(label, $0) }
-                done.append(r)
-                if !json { print(r.file.path) }
+                staged.append(r)
+                if context == nil, !json { print(r.file.path) }
+                finishing.append((r, await finish(r)))
             }
             if supercut {
                 // Joined from the clips just exported: no second encode.
                 let slug = renderer.supercutSlug(base: pkg.deletingPathExtension().lastPathComponent)
-                let r = try await renderer.joinSupercut(done, slug: slug, into: outDir, options: options) {
+                let r = try await renderer.joinSupercut(staged, slug: slug, into: outDir, options: options) {
                     Console.progress("[supercut] \(slug)", $0)
                 }
-                done.append(r)
-                if !json { print(r.file.path) }
+                if context == nil, !json { print(r.file.path) }
+                finishing.append((r, await finish(r, supercut: true)))
             }
-            return done
+            var outcomes: [JSONReport.Outcome] = []
+            var finished: [Renderer.Rendered] = []
+            for (r, task) in finishing {
+                guard let task else { outcomes.append(JSONReport.Outcome(rendered: r)); continue }
+                do {
+                    let done = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+                    outcomes.append(JSONReport.Outcome(rendered: done, postExport: "done"))
+                    finished.append(r)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    Console.note("\(r.slug): \(error)")
+                    outcomes.append(JSONReport.Outcome(rendered: r, postExport: "failed",
+                                                       output: (error as? PostExportRunner.Failure)?.output))
+                }
+            }
+            // Staged files are kept only where the step failed, to look at.
+            finished.forEach(PostExportRunner.removeStaging)
+            return outcomes
         }
         // Ctrl-C cancels cleanly: the clip being encoded is abandoned and its partial
         // file removed; clips already finished stay.
         signal(SIGINT, SIG_IGN)
         let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
-        interrupt.setEventHandler { work.cancel() }
+        interrupt.setEventHandler { work.cancel(); Task { await lane.cancelAll() } }
         interrupt.resume()
         defer { interrupt.cancel(); signal(SIGINT, SIG_DFL) }
 
         do {
             let done = try await work.value
+            if let stills { await StillsCommand.saveScores(stills, pkg) }
             if json { JSONReport.emit(JSONReport.export(done, folder: outDir)) }
-            Console.note("Exported \(done.count) clip\(done.count == 1 ? "" : "s") to \(outDir.path)")
+            let failed = done.filter { $0.postExport == "failed" }.count
+            Console.note("Exported \(done.count) clip\(done.count == 1 ? "" : "s") to \(outDir.path)"
+                         + (failed > 0 ? "; \(failed) failed in \(postExport!.name)" : ""))
+            if failed > 0 { throw ExitCode.failure }
         } catch is CancellationError {
+            if let stills { await StillsCommand.saveScores(stills, pkg) }
             Console.note("Cancelled. Clips that finished are in \(outDir.path); nothing partial was left behind.")
             throw ExitCode(130)
         }

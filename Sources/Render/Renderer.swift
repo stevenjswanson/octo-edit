@@ -18,12 +18,19 @@ public struct Renderer {
         public var resolution: Resolution = .full
         /// nil = the project's `defaults.framing`.
         public var framing: Framing?
+        /// The post-export program that will make the real export. With one, files go
+        /// into `<clip folder>/.unbranded/` as its input and the stamp (which records
+        /// the program) is left to `PostExportRunner`. Ignored for previews.
+        public var postExport: PostExport?
+        public var staged: Bool { postExport != nil && !preview }
 
-        public init(codec: Codec? = nil, preview: Bool = false, resolution: Resolution = .full, framing: Framing? = nil) {
+        public init(codec: Codec? = nil, preview: Bool = false, resolution: Resolution = .full, framing: Framing? = nil,
+                    postExport: PostExport? = nil) {
             self.codec = codec
             self.preview = preview
             self.resolution = resolution
             self.framing = framing
+            self.postExport = postExport
         }
     }
 
@@ -48,6 +55,12 @@ public struct Renderer {
     }
 
     public func framing(_ options: Options) -> Framing { options.framing ?? project.settings.framing }
+
+    /// What an export with these options records in its stamp, besides the clip.
+    public func stampOutput(_ options: Options) -> ExportStamp.Output {
+        ExportStamp.Output(framing: framing(options), codec: options.codec ?? project.settings.codec,
+                           postExport: options.staged ? options.postExport : nil, faces: faces)
+    }
 
     /// The 9:16 column over these segments, or nil to keep the frame as it came in.
     func column(_ segments: [ResolvedSegment], _ options: Options) -> ColumnPath? {
@@ -88,6 +101,8 @@ public struct Renderer {
         public var captions: String?
         /// The speaker-and-cut timeline written beside it (nil for previews).
         public var timeline: Timeline?
+        /// For a staged export: the stamp to write once the real export is in place.
+        public var stamp: String?
 
         public init(slug: String, name: String?, file: URL, duration: Seconds, clips: [ClipID] = [],
                     captions: String? = nil, timeline: Timeline? = nil) {
@@ -106,20 +121,28 @@ public struct Renderer {
     public let info: SourceInfo
     /// Face tracks for 9:16 framing; without them the column stays centred.
     public let faces: FaceTracks?
+    /// Title-card stills; without them exports have no `.still.jpg` and no `titlecard`.
+    public let stills: TitleStills?
 
-    public init(project: Project, source: URL, faces: FaceTracks? = nil) async throws {
+    public init(project: Project, source: URL, faces: FaceTracks? = nil, stills: TitleStills? = nil) async throws {
         guard FileManager.default.fileExists(atPath: source.path) else { throw RenderError.missingSource(source.path) }
         self.project = project
         self.source = source
         self.faces = faces
+        self.stills = stills
         self.info = try await SourceInfo.read(source)
     }
 
     /// Where an export's files go: `<exports>/<slug>/` (every resolution and shape of a
     /// clip together), or for previews, which have no sidecars, `<exports>` itself.
     public func folder(_ exports: URL, slug: String, _ options: Options) -> URL {
-        options.preview ? exports : exports.appendingPathComponent(slug, isDirectory: true)
+        if options.preview { return exports }
+        let clip = exports.appendingPathComponent(slug, isDirectory: true)
+        return options.staged ? clip.appendingPathComponent(Self.stagingFolder, isDirectory: true) : clip
     }
+
+    /// Where a staged export's files go, inside the clip's folder.
+    public static let stagingFolder = ".unbranded"
 
     /// Runs `body`; if it throws (or is cancelled), removes `directory` when it is left
     /// empty, so a failed export leaves no empty clip folder behind.
@@ -134,6 +157,22 @@ public struct Renderer {
     /// Writes `<base>.timeline.json`.
     func write(_ timeline: Timeline, base: String, in directory: URL) throws {
         try timeline.json().write(to: directory.appendingPathComponent(base + ".timeline.json"), atomically: true, encoding: .utf8)
+    }
+
+    /// Writes `<base>.still.jpg`, the title card's picture, and says what it is. Nil
+    /// without stills, or when no face was found to pick from (then a stale image is removed).
+    func writeStill(_ clip: Clip, _ segments: [ResolvedSegment], base: String, in directory: URL,
+                    _ options: Options) async throws -> Timeline.TitleCard? {
+        let file = directory.appendingPathComponent(base + ".still.jpg")
+        guard let stills, let choice = try await stills.choice(for: clip, in: project) else {
+            try? FileManager.default.removeItem(at: file)
+            return nil
+        }
+        let l = clip.autoLevels ? try await AutoLevels.measure(AVURLAsset(url: source), segments: segments) : nil
+        let image = try await StillImage.render(source: source, at: choice.t, faceX: choice.face?.centerX,
+                                                framing: framing(options), levels: l)
+        try StillImage.writeJPEG(image, to: file)
+        return Timeline.TitleCard(time: Timeline.ms(choice.t), auto: choice.automatic, image: file.lastPathComponent)
     }
 
     /// Renders one clip to `<exports>/<name>/<name>-4k.mp4` plus `<name>-4k.vtt` captions,
@@ -163,17 +202,21 @@ public struct Renderer {
         if !options.preview {
             vtt = Captions.webVTT(for: clip, in: project, sourceRanges: built.sourceRanges, clipStarts: built.segmentStarts)
             timeline = Timeline.clip(clip, in: project, sourceRanges: built.sourceRanges, clipStarts: built.segmentStarts)
+            timeline!.titlecard = try await writeStill(clip, segments, base: baseName(name, options), in: directory, options)
             try write(timeline!, base: baseName(name, options), in: directory)
             try vtt!.write(to: directory.appendingPathComponent(baseName(name, options) + ".vtt"), atomically: true, encoding: .utf8)
             try ExportNotes.clip(clip, in: project)
                 .write(to: directory.appendingPathComponent(baseName(name, options) + ".md"), atomically: true, encoding: .utf8)
-            if let stamp = ExportStamp.fingerprint(of: clip, in: project, sourceIdentity: ExportStamp.sourceIdentity(source)) {
-                try ExportStamp.write(stamp, in: directory)
-            }
         }
+        let stamp = options.preview ? nil
+            : ExportStamp.fingerprint(of: clip, in: project, sourceIdentity: ExportStamp.sourceIdentity(source),
+                                      output: stampOutput(options))
+        if let stamp, !options.staged { try ExportStamp.write(stamp, in: directory) }
         let duration = built.sourceRanges.reduce(0) { $0 + $1.duration }
-        return Rendered(slug: slug, name: clip.name, file: file, duration: duration, clips: [clip.id],
-                        captions: vtt, timeline: timeline)
+        var r = Rendered(slug: slug, name: clip.name, file: file, duration: duration, clips: [clip.id],
+                         captions: vtt, timeline: timeline)
+        if options.staged { r.stamp = stamp }
+        return r
     }
 
     /// A supercut made by joining clips already exported with the same options — no

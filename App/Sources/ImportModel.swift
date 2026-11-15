@@ -5,8 +5,13 @@ import Ingest
 import Save
 import Transcribe
 import Waveform
+import Diarize
+import Naming
 
 /// File ▸ Import Video…: ingest → save → open, the same path as `octoedit init`.
+/// Ingest finds who speaks when unless that's switched off; faces are scanned once
+/// the project is open (in the background, as `DocumentModel.loadFaces` does for any
+/// project without cache/faces.tsv), unless Find faces is off.
 /// Ingest's project goes straight to Save into a temporary package beside the
 /// destination; only a finished save is moved into place, so a cancelled or failed
 /// import leaves nothing behind (and never touches an existing package).
@@ -21,6 +26,15 @@ final class ImportModel {
     var video: URL? { didSet { if video != oldValue { videoChanged() } } }
     var zoom: URL?
     var destination: URL?
+    /// The roster, as typed: names the voices may be given.
+    var roster = ""
+    /// The two checkboxes, remembered across imports.
+    var identifySpeakers = UserDefaults.standard.object(forKey: "importIdentifySpeakers") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(identifySpeakers, forKey: "importIdentifySpeakers") }
+    }
+    var findFaces = UserDefaults.standard.object(forKey: "importFindFaces") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(findFaces, forKey: "importFindFaces") }
+    }
     private(set) var phase: Phase = .editing
     private(set) var started: Date?
 
@@ -54,13 +68,14 @@ final class ImportModel {
 
     /// Defaults for now (pads, crossfade, codec same as the video); they're in the
     /// project's front matter if a project ever needs different ones.
-    var settings: ProjectSettings { ProjectSettings() }
+    var settings: ProjectSettings { ProjectSettings(findFaces: findFaces) }
 
     // MARK: Running
 
     func start() {
         guard let video, let destination, !isRunning else { return }
         let zoom = self.zoom, settings = self.settings, queue = self.queue
+        let speakers = identifySpeakers, roster = Roster.parse(self.roster)
         let temp = destination.deletingLastPathComponent()
             .appendingPathComponent(".\(destination.deletingPathExtension().lastPathComponent).importing.octoedit")
         started = Date()
@@ -69,8 +84,13 @@ final class ImportModel {
             do {
                 try? FileManager.default.removeItem(at: temp)
                 let result = try await queue.run {
-                    try await Ingest(transcriber: AppleSpeechTranscriber(), analyzer: AssetEnvelopeAnalyzer())
-                        .run(video: video, zoom: zoom, settings: settings) { stage, fraction in
+                    var ingest = Ingest(transcriber: AppleSpeechTranscriber(), analyzer: AssetEnvelopeAnalyzer())
+                    if speakers {
+                        ingest.diarizer = FluidAudioDiarizer()
+                        ingest.speakerNamer = SpeakerNamers.preferred().namer
+                    }
+                    return try await ingest
+                        .run(video: video, zoom: zoom, settings: settings, speakers: roster) { stage, fraction in
                             Task { @MainActor [weak self] in self?.progress(stage.rawValue, fraction) }
                         }
                 }

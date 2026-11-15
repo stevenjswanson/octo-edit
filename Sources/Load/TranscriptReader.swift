@@ -59,6 +59,7 @@ struct Reader {
         var name: String?
         var levels = true
         var export = true
+        var still: Seconds?
         var openOffset: Seconds?
         var closeOffset: Seconds?
         var first: Int
@@ -201,13 +202,13 @@ struct Reader {
                     openFence!.last = i
                 }
                 if openClip != nil { openClip!.last = i }
-            case .clipOpen(let name, let offset, let levels, let export):
+            case .clipOpen(let name, let offset, let levels, let export, let still):
                 if let c = openClip {
                     error("clip opened inside another clip (opened on line \(c.line))", line)
                 } else if openFence != nil {
                     error("clip opened inside omitted text", line)
                 } else {
-                    openClip = PendingClip(name: name.flatMap { $0.isEmpty ? nil : $0 }, levels: levels, export: export, openOffset: offset,
+                    openClip = PendingClip(name: name.flatMap { $0.isEmpty ? nil : $0 }, levels: levels, export: export, still: still, openOffset: offset,
                                            first: words.count, line: line)
                 }
             case .clipClose(let offset):
@@ -294,7 +295,7 @@ struct Reader {
                 error("clip has no kept words", c.line)
                 continue
             }
-            project.clips.append(Clip(id: ClipID(n + 1), name: c.name, segments: segments, autoLevels: c.levels, export: c.export))
+            project.clips.append(Clip(id: ClipID(n + 1), name: c.name, segments: segments, autoLevels: c.levels, export: c.export, still: c.still))
         }
         // Omitted runs outside the clips. A run never straddles a clip edge: clips
         // start and end on kept words.
@@ -320,7 +321,7 @@ struct Reader {
             return
         }
         guard let map = node as? [String: Any] else { error("front matter must be a YAML mapping", 2); return }
-        if let v = map["octoedit"] as? Int, v != PackageLayout.formatVersion {
+        if let v = map["octoedit"] as? Int, v > PackageLayout.formatVersion {
             warn("format version \(v) is newer than this tool understands (\(PackageLayout.formatVersion))", 2)
         }
         if let s = map["source"] as? String { project.source = s } else { error("front matter needs `source:`", 2) }
@@ -349,6 +350,24 @@ struct Reader {
                 if let framing = (f as? String).flatMap(Framing.init(rawValue:)) ?? ((f as? Int) == 556 ? .portrait : nil) {
                     project.settings.framing = framing
                 } else { error("defaults.framing must be source or \"9:16\"", 2) }
+            }
+            if let f = d["faces"] {
+                // YAML 1.1 may read on/off as booleans.
+                switch (f as? Bool, (f as? String)?.lowercased()) {
+                case (true?, _), (_, "on"?): project.settings.findFaces = true
+                case (false?, _), (_, "off"?): project.settings.findFaces = false
+                default: error("defaults.faces must be on or off", 2)
+                }
+            }
+        }
+        if let pe = map["post-export"] {
+            if let run = pe as? String, !run.isEmpty {
+                project.settings.postExport = PostExport(run: run)
+            } else if let m = pe as? [String: Any], let run = m["run"] as? String, !run.isEmpty {
+                let args = (m["args"] as? [Any])?.map { "\($0)" } ?? PostExport.defaultArgs
+                project.settings.postExport = PostExport(run: run, args: args)
+            } else {
+                error("`post-export:` needs a program: { run: path/to/program, args: [\"{timeline}\", -o, \"{output}\"] }", 2)
             }
         }
         if let s = map["speakers"] {

@@ -86,7 +86,7 @@ final class DocumentModel {
     /// The Re-export progress sheet is up.
     var reexporting = false
     /// Face boxes through the video (cache/faces.tsv), for 9:16 framing and speaker portraits.
-    var faces: FaceTracks?
+    var faces: FaceTracks? { didSet { if faces != oldValue { refreshExportStates() } } }
     /// Finding faces in the background: progress 0…1.
     var findingFaces: Double?
     @ObservationIgnored var labelsCache: (key: Int, labels: FaceLabels)?
@@ -119,12 +119,16 @@ final class DocumentModel {
     /// anything has been exported, never exported under their current name), with why.
     /// Checked against the stamps in the export folder whenever the project changes.
     private(set) var needsExport: [ClipID: String] = [:]
+    /// Clips whose export folder holds an up-to-date export (stamp matches).
+    private(set) var currentExports: Set<ClipID> = []
 
     @ObservationIgnored let player = AVPlayer()
     @ObservationIgnored let preview = PreviewModel()
     @ObservationIgnored lazy var sourceSpeed = SpeedWatcher(player)
     @ObservationIgnored lazy var previewSpeed = SpeedWatcher(preview.player)
     @ObservationIgnored let thumbnails = Thumbnails()
+    /// Title-card stills for the clip panel.
+    @ObservationIgnored let stills = StillStore()
     @ObservationIgnored weak var undoManager: UndoManager?
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var rateObserver: NSKeyValueObservation?
@@ -160,6 +164,8 @@ final class DocumentModel {
         }
         preview.faceLabels = { [weak self] in self?.faceLabels }
         exporter.onFinish = { [weak self] in self?.refreshExportStates() }
+        exporter.onStills = { [weak self] s in await self?.stills.absorb(s, package: self?.packageURL) }
+        exporter.onOutputChange = { [weak self] in self?.refreshExportStates() }
         preview.onPlay = { [weak self] in
             self?.player.pause()
             self?.activePane = .preview
@@ -214,6 +220,7 @@ final class DocumentModel {
             }
         }
         thumbnails.attach(source: sourceMissing ? nil : url)
+        stills.reset()
     }
 
     private func setProject(_ p: Project) {
@@ -236,9 +243,15 @@ final class DocumentModel {
     func refreshExportStates() {
         guard let source = sourceURL, let folder = exporter.destination ?? ExportModel.lastFolder(package: packageURL) else {
             if !needsExport.isEmpty { needsExport = [:] }
+            if !currentExports.isEmpty { currentExports = [] }
             return
         }
-        let states = ExportStamp.states(project, exports: folder, sourceIdentity: ExportStamp.sourceIdentity(source))
+        // The output an export made now would have: a stamp records it, so changing any
+        // of these (framing, codec, faces, branding on/off or its command) marks clips.
+        let output = ExportStamp.Output(framing: project.settings.framing, codec: project.settings.codec,
+                                        postExport: exporter.runPostExport && packageURL != nil ? project.settings.postExport : nil,
+                                        faces: faces)
+        let states = ExportStamp.states(project, exports: folder, sourceIdentity: ExportStamp.sourceIdentity(source), output: output)
         let anyExported = states.values.contains { $0 != .notExported }
         var out: [ClipID: String] = [:]
         for (id, state) in states where project.clip(id)?.export != false {
@@ -250,6 +263,8 @@ final class DocumentModel {
             }
         }
         if out != needsExport { needsExport = out }
+        let current = Set(states.filter { $0.value == .current }.map(\.key))
+        if current != currentExports { currentExports = current }
     }
 
     // MARK: Editing

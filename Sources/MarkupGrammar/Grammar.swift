@@ -9,12 +9,15 @@ public enum PackageLayout {
     public static let cacheDir = "cache"
     public static let waveform = "cache/waveform.bin"
     public static let faces = "cache/faces.tsv"
+    public static let stills = "cache/stills.tsv"
     /// The words.tsv a Replace Video overwrote, kept in case the result is wrong.
     public static let wordsBeforeReplace = "cache/words.before-replace.tsv"
     public static let exportsDir = "exports"
     public static let gitignore = ".gitignore"
     public static let gitignoreContents = "cache/\nexports/\n"
-    public static let formatVersion = 1
+    /// The newest format this build reads. Files are written as 1 unless they need 2:
+    /// version 2 adds `still=` on clip markers (an older build would reject it).
+    public static let formatVersion = 2
 }
 
 public enum Grammar {
@@ -32,6 +35,13 @@ public enum Grammar {
         let tenths = Int((max(t, 0) * 1000).rounded()) / 100
         let h = tenths / 36000, m = (tenths / 600) % 60, s = (tenths / 10) % 60, d = tenths % 10
         return String(format: "%02d:%02d:%02d.%d", h, m, s, d)
+    }
+
+    /// `hh:mm:ss.mmm`, whole milliseconds: a still names one exact frame, and a tenth
+    /// of a second off can land on a blink.
+    public static func preciseTimestamp(_ t: Seconds) -> String {
+        let ms = Int((max(t, 0) * 1000).rounded())
+        return String(format: "%02d:%02d:%02d.%03d", ms / 3_600_000, (ms / 60_000) % 60, (ms / 1000) % 60, ms % 1000)
     }
 
     public static func parseTimestamp(_ s: Substring) -> Seconds? {
@@ -74,13 +84,16 @@ public enum Grammar {
     // MARK: Markers
 
     /// Auto levels is on unless the marker says `nolevels`; the clip is exported unless
-    /// it says `noexport`.
-    public static func clipOpen(name: String?, offset: Seconds?, levels: Bool = true, export: Bool = true) -> String {
+    /// it says `noexport`. `still=hh:mm:ss.mmm` is the title card's picture, as a time in
+    /// the source recording; without it the still is picked automatically.
+    public static func clipOpen(name: String?, offset: Seconds?, levels: Bool = true, export: Bool = true,
+                                still: Seconds? = nil) -> String {
         var s = "{clip"
         if let name { s += " \"" + name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
         if let offset { s += " " + Self.offset(offset) }
         if !levels { s += " nolevels" }
         if !export { s += " noexport" }
+        if let still { s += " still=" + preciseTimestamp(still) }
         return s + "}"
     }
 
@@ -96,7 +109,7 @@ public enum Grammar {
 /// Body-text tokens of transcript.md.
 public enum Token: Equatable, Sendable {
     case word(String)
-    case clipOpen(name: String?, offset: Seconds?, levels: Bool, export: Bool)
+    case clipOpen(name: String?, offset: Seconds?, levels: Bool, export: Bool, still: Seconds?)
     case clipClose(offset: Seconds?)
     case fence
     case offset(Seconds)
@@ -193,17 +206,22 @@ public enum Lexer {
                 rest = rest[rest.index(after: k)...].drop { $0 == " " }
             }
             // Then an optional offset, then flags in any order: `nolevels` (auto levels
-            // off), `noexport` (left out of exports), and `levels` (on, the default;
-            // written by older versions).
+            // off), `noexport` (left out of exports), `still=hh:mm:ss.mmm` (the title
+            // card's picture) and `levels` (on, the default; written by older versions).
             var parts = rest.split(separator: " ")
             var levels = true, export = true
-            while let flag = parts.last, ["levels", "nolevels", "noexport"].contains(flag) {
+            var still: Seconds?
+            while let flag = parts.last, ["levels", "nolevels", "noexport"].contains(flag) || flag.hasPrefix("still=") {
                 if flag == "nolevels" { levels = false }
                 if flag == "noexport" { export = false }
+                if flag.hasPrefix("still=") {
+                    guard still == nil, let t = Grammar.parseTimestamp(flag.dropFirst(6)), t >= 0 else { return .invalid("{\(body)}") }
+                    still = t
+                }
                 parts.removeLast()
             }
-            if parts.isEmpty { return .clipOpen(name: name, offset: nil, levels: levels, export: export) }
-            if parts.count == 1, let o = Grammar.parseMilliseconds(parts[0]) { return .clipOpen(name: name, offset: o, levels: levels, export: export) }
+            if parts.isEmpty { return .clipOpen(name: name, offset: nil, levels: levels, export: export, still: still) }
+            if parts.count == 1, let o = Grammar.parseMilliseconds(parts[0]) { return .clipOpen(name: name, offset: o, levels: levels, export: export, still: still) }
             return .invalid("{\(body)}")
         }
         if let o = Grammar.parseMilliseconds(text), text.first == "+" || text.first == "-" {
@@ -320,5 +338,42 @@ public enum FacesFile {
             }
         }
         return FaceTracks(width: w, height: ht, frames: frames)
+    }
+}
+
+/// `cache/stills.tsv`: fine scores of the exact frames considered for title-card stills,
+/// so each is decoded and judged once. Plain text:
+///
+///     # octoedit stills 1
+///     3481.233	0.612	0.880	0.950	0.4012	0.2210	0.0310	0.0550
+///
+/// Source time, quality, eyes, mouth (0…1 each), then the face box (x y w h as
+/// fractions, origin top-left), or `-` in each when no face was found.
+public enum StillsFile {
+    static let magic = "# octoedit stills 1"
+
+    public static func encode(_ scores: [StillScore]) -> String {
+        var out = magic + "\n"
+        func n(_ v: Double) -> String { String(format: "%.4f", v) }
+        for s in scores.sorted(by: { $0.t < $1.t }) {
+            let box = s.face.map { [$0.x, $0.y, $0.w, $0.h].map(n) } ?? ["-", "-", "-", "-"]
+            out += ([String(format: "%.3f", s.t), String(format: "%.3f", s.quality), String(format: "%.3f", s.eyes),
+                     String(format: "%.3f", s.mouth)] + box).joined(separator: "\t") + "\n"
+        }
+        return out
+    }
+
+    public static func decode(_ text: String) -> [StillScore]? {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: true)[...]
+        guard lines.popFirst() == Substring(magic) else { return nil }
+        var out: [StillScore] = []
+        for line in lines {
+            let p = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard p.count == 8, let t = Double(p[0]), let q = Double(p[1]), let e = Double(p[2]), let m = Double(p[3]) else { return nil }
+            var face: FaceBox?
+            if let x = Double(p[4]), let y = Double(p[5]), let w = Double(p[6]), let h = Double(p[7]) { face = FaceBox(x: x, y: y, w: w, h: h) }
+            out.append(StillScore(t: t, quality: q, eyes: e, mouth: m, face: face))
+        }
+        return out
     }
 }

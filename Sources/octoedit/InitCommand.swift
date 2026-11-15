@@ -16,16 +16,23 @@ struct InitCommand: AsyncParsableCommand {
         Transcribes the video's first audio track on this Mac (English), tightens word
         edges against the audio, and, with --zoom, takes speaker names and text from the
         Zoom transcript. Writes an un-annotated transcript.md into the package.
-        Takes about 1½ minutes per hour of video.
 
-        With --speakers, also finds who speaks when from the voices (about half a
-        minute more per hour): every voice change starts a paragraph, and voices are
-        named from the roster, or Speaker 1, 2, … when no name fits. Zoom's names win
-        when Zoom credits more than one person. Run `octoedit speakers` later to redo it.
+        Also finds who speaks when from the voices: every voice change starts a
+        paragraph, and voices are named from the --speakers roster, or Speaker 1, 2, …
+        when no name fits (or there is no roster). Zoom's names win when Zoom credits
+        more than one person. --no-speakers skips this; `octoedit speakers` redoes it.
+
+        Then scans the video for faces, for speaker portraits and 9:16 framing (as
+        `octoedit faces`). --no-faces skips the scan and writes `faces: off`, so the
+        app won't start one on its own either; `octoedit faces` still runs one.
+
+        Takes about 2 minutes per hour of video, plus about 20 minutes per hour of
+        4K video for faces.
 
         EXAMPLE
           octoedit init --video seminar-4k.mp4 --zoom GMT20260928_Recording.transcript.vtt seminar.octoedit
           octoedit init --video panel.mp4 --speakers "Mia Minnes, Kathy, Ori, Leena, Steve Swanson" panel.octoedit
+          octoedit init --video talk.mp4 --no-faces talk.octoedit
         """
     )
 
@@ -35,11 +42,14 @@ struct InitCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Zoom transcript (.vtt) of the same meeting.")
     var zoom: String?
 
-    @Option(help: "The roster, comma-separated; also turns on finding who speaks when.")
+    @Option(help: "The roster, comma-separated: names the voices may be given.")
     var speakers: String?
 
-    @Flag(help: "Also find faces for 9:16 framing (as `octoedit faces`).")
-    var faces = false
+    @Flag(name: .customLong("no-speakers"), help: "Don't find who speaks when.")
+    var noSpeakers = false
+
+    @Flag(inversion: .prefixedNo, help: "Find faces for portraits and 9:16 framing (as `octoedit faces`).")
+    var faces = true
 
     @Option(help: "Default lead-in before a clip's first word.")
     var pre: Milliseconds?
@@ -59,6 +69,10 @@ struct InitCommand: AsyncParsableCommand {
     @Argument(help: "The package to create, e.g. meeting.octoedit")
     var package: String
 
+    func validate() throws {
+        if noSpeakers, speakers != nil { throw ValidationError("--speakers and --no-speakers don't go together") }
+    }
+
     func run() async throws {
         let videoURL = URL(cliPath: video)
         let zoomURL = zoom.map(URL.init(cliPath:))
@@ -77,13 +91,14 @@ struct InitCommand: AsyncParsableCommand {
         if let post { settings.postPad = post.seconds }
         if let crossfade { settings.crossfade = crossfade.seconds }
         settings.codec = codec
+        settings.findFaces = faces
 
         let started = Date()
         var ingest = Ingest(transcriber: AppleSpeechTranscriber(), analyzer: AssetEnvelopeAnalyzer())
         let roster = speakers.map(Roster.parse) ?? []
-        if speakers != nil {
+        if !noSpeakers {
             let (namer, reason) = SpeakerNamers.preferred()
-            if let reason { Console.note("Naming voices from textual cues only, because \(reason).") }
+            if let reason, !roster.isEmpty { Console.note("Naming voices from textual cues only, because \(reason).") }
             ingest.diarizer = FluidAudioDiarizer()
             ingest.speakerNamer = namer
         }

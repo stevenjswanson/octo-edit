@@ -62,7 +62,7 @@ let package = Package(
         .executableTarget(
             name: "octoedit",
             dependencies: [
-                "Core", "Align", "Ingest", "Load", "Save", "Render", "Naming", "Transcribe", "Waveform", "Diarize", "FaceTrack", "SpeakerFraming",
+                "Core", "Align", "Ingest", "Load", "Save", "MarkupGrammar", "Render", "Naming", "Transcribe", "Waveform", "Diarize", "FaceTrack", "SpeakerFraming",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             swiftSettings: swift5

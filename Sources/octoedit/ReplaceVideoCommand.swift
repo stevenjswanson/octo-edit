@@ -27,19 +27,21 @@ struct ReplaceVideoCommand: AsyncParsableCommand {
         is listed: check its start and end.
 
         The old words.tsv is kept as cache/words.before-replace.tsv. cache/faces.tsv
-        is removed, because it was scanned from the old video; --faces scans the new
-        one and says how the speakers with a face changed.
+        is removed, because it was scanned from the old video. The new one is scanned
+        (as `octoedit faces`) and the report says how the speakers with a face changed,
+        unless the project says `faces: off` or you pass --no-faces; --faces scans
+        even then.
 
         EXAMPLE
-          octoedit replace-video --video seminar-4k.mov seminar.octoedit --faces
+          octoedit replace-video --video seminar-4k.mov seminar.octoedit
         """
     )
 
     @Option(name: .long, help: "The new input video.")
     var video: String
 
-    @Flag(help: "Also find faces in the new video (as `octoedit faces`).")
-    var faces = false
+    @Flag(inversion: .prefixedNo, help: "Find faces in the new video (default: unless the project says `faces: off`).")
+    var faces: Bool?
 
     @Flag(help: "Print the result as JSON on stdout.")
     var json = false
@@ -111,7 +113,7 @@ struct ReplaceVideoCommand: AsyncParsableCommand {
         }
 
         var faceChange: ReplaceCheck.FaceChange?
-        if faces {
+        if faces ?? after.project.settings.findFaces {
             let now = try await FacesCommand.build(pkg, source: videoURL, project: after.project)
             let change = ReplaceCheck.faces(before: facesBefore, after: now, speakers: after.project.speakersInOrder())
             if !facesBefore.isEmpty { Console.note(change.summary) }

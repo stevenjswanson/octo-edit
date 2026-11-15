@@ -12,6 +12,11 @@ import Core
 ///   turn starts at every change of speaker (or of clip).
 /// - `words`: each kept, timed word, with its speaker and the index of its segment.
 ///
+/// - `titlecard` (one-clip exports only, when a still was found): the title card's
+///   picture, `{"time": <source seconds>, "auto": <picked automatically>, "image": "<file>"}`.
+///   `image` is a JPEG beside the timeline: that exact source frame, framed like the
+///   export (a full-height 9:16 column on the speaker's face) at source resolution.
+///
 /// Times are from the frame-snapped ranges the encoder used, rounded to milliseconds.
 /// Words typed by hand (never spoken, so untimed) are left out, as in the captions.
 public struct Timeline: Codable, Equatable, Sendable {
@@ -45,6 +50,12 @@ public struct Timeline: Codable, Equatable, Sendable {
         public var text: String
     }
 
+    public struct TitleCard: Codable, Equatable, Sendable {
+        public var time: Seconds
+        public var auto: Bool
+        public var image: String
+    }
+
     public var octoedit = 1
     public var source: String
     public var duration: Seconds
@@ -54,6 +65,7 @@ public struct Timeline: Codable, Equatable, Sendable {
     public var segments: [Segment]
     public var turns: [Turn]
     public var words: [TimedWord]
+    public var titlecard: TitleCard?
 
     /// One clip, from the builder's `sourceRanges` and `segmentStarts`.
     public static func clip(_ clip: Clip, in p: Project, sourceRanges: [ResolvedSegment], clipStarts: [Seconds]) -> Timeline {
@@ -162,7 +174,8 @@ public struct Timeline: Codable, Equatable, Sendable {
               try object([("speaker", $0.speaker), ("start", $0.start), ("end", $0.end), ("text", $0.text)]) }),
           "words": \(try array(words) {
               try object([("start", $0.start), ("end", $0.end), ("speaker", $0.speaker),
-                          ("segment", $0.segment), ("text", $0.text)]) })
+                          ("segment", $0.segment), ("text", $0.text)]) })\(try titlecard.map {
+              ",\n  \"titlecard\": " + (try object([("time", $0.time), ("auto", $0.auto), ("image", $0.image)])) } ?? "")
         }
 
         """

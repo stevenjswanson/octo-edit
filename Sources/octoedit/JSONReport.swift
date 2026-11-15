@@ -49,6 +49,9 @@ enum JSONReport {
         var notes: String?
         var timeline: String?
         var duration: Double
+        /// "done", "failed" or "skipped" when the project has a post-export program.
+        var postExport: String?
+        var postExportOutput: String?
     }
 
     static func check(_ loaded: PackageReader.Result, transcript: String, only: [String]) -> Check {
@@ -75,15 +78,28 @@ enum JSONReport {
                        lastWords: kept.suffix(8).joined(separator: " "))
     }
 
+    /// One exported file and what its post-export step did (nil status: no step).
+    struct Outcome {
+        var rendered: Renderer.Rendered
+        var postExport: String?
+        var output: String?
+    }
+
     static func export(_ rendered: [Renderer.Rendered], folder: URL) -> Export {
+        export(rendered.map { Outcome(rendered: $0) }, folder: folder)
+    }
+
+    static func export(_ outcomes: [Outcome], folder: URL) -> Export {
         let fm = FileManager.default
         func sidecar(_ video: URL, _ ext: String) -> String? {
             let u = video.deletingPathExtension().appendingPathExtension(ext)
             return fm.fileExists(atPath: u.path) ? u.path : nil
         }
-        return Export(folder: folder.path, files: rendered.map {
-            FileOut(slug: $0.slug, name: $0.name, video: $0.file.path, captions: sidecar($0.file, "vtt"),
-                    notes: sidecar($0.file, "md"), timeline: sidecar($0.file, "timeline.json"), duration: round($0.duration))
+        return Export(folder: folder.path, files: outcomes.map { o in
+            let r = o.rendered
+            return FileOut(slug: r.slug, name: r.name, video: r.file.path, captions: sidecar(r.file, "vtt"),
+                           notes: sidecar(r.file, "md"), timeline: sidecar(r.file, "timeline.json"), duration: round(r.duration),
+                           postExport: o.postExport, postExportOutput: o.output)
         })
     }
 

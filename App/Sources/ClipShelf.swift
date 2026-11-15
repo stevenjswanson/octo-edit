@@ -30,6 +30,8 @@ struct ClipShelf: View {
                                     .disabled(model.loadErrors || model.sourceMissing)
                                 Button("Re-export") { model.reexportClip(clip.id) }
                                     .disabled(model.loadErrors || model.sourceMissing || model.exporter.isExporting)
+                                Button("Show in Finder") { model.showExportInFinder(clip.id) }
+                                    .disabled(model.exportedVideo(of: clip.id) == nil)
                                 Divider()
                                 Button("Delete Clip") { model.deleteClip(clip.id) }
                             }

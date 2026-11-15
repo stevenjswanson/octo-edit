@@ -386,6 +386,17 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(!p.clips[0].export)
     }
 
+    @Test func aChosenStillStaysWithTheFirstPartAndSurvivesAMerge() throws {
+        var (p, id) = try project()
+        try p.setStill(clip: id, 1234.5)
+        let second = try p.splitClip(id, atWord: 9)
+        #expect(p.clip(id)!.still == 1234.5 && p.clip(second)!.still == nil)
+        try p.mergeClips([id, second])
+        #expect(p.clips[0].still == 1234.5)
+        try p.setStill(clip: p.clips[0].id, nil)
+        #expect(p.clips[0].still == nil)
+    }
+
     @Test func splittingInsideAnOmissionLeavesItBetweenTheClips() throws {
         var (p, id) = try project()
         let second = try p.splitClip(id, atWord: 6)       // inside the omitted 5…6
@@ -635,3 +646,23 @@ func sampleProject(count: Int = 10) -> Project {
     }
 }
 
+
+@Suite struct PostExportArgumentTests {
+    @Test func splitsLikeAShell() {
+        #expect(PostExport.splitArguments(#"{timeline} -o {output}"#) == ["{timeline}", "-o", "{output}"])
+        #expect(PostExport.splitArguments(#"--title "Q & A" 'it''s' a\ b "" x"#) == ["--title", "Q & A", "its", "a b", "", "x"])
+        #expect(PostExport.splitArguments("  ") == [])
+    }
+
+    @Test func joinReadsBack() {
+        let args = ["{timeline}", "-o", "{output}", "--title", "Q & A", "say \"hi\"", "", #"back\slash"#]
+        #expect(PostExport.splitArguments(PostExport.joinArguments(args)) == args)
+        #expect(PostExport.joinArguments(PostExport.defaultArgs) == "{timeline} -o {output}")
+    }
+
+    @Test func nameAndOutput() {
+        let pe = PostExport(run: "~/tools/brand-clip")
+        #expect(pe.name == "brand-clip" && pe.writesOutput)
+        #expect(!PostExport(run: "x", args: ["{video}"]).writesOutput)
+    }
+}

@@ -100,9 +100,12 @@ public struct Clip: Equatable, Sendable {
     /// Included when exporting (the shelf's Export checkbox). Off (`{clip … noexport}`)
     /// keeps the clip out of exports and supercuts until it is turned back on.
     public var export: Bool
+    /// The title card's picture: a time in the source recording (`{clip … still=00:58:01.233}`),
+    /// anywhere in the talk. `nil` picks one automatically from the clip's opening (`StillPicker`).
+    public var still: Seconds?
 
     public init(id: ClipID, name: String? = nil, notes: String = "", suggestions: [String] = [],
-                segments: [Segment], autoLevels: Bool = true, export: Bool = true) {
+                segments: [Segment], autoLevels: Bool = true, export: Bool = true, still: Seconds? = nil) {
         self.id = id
         self.name = name
         self.notes = notes
@@ -110,6 +113,7 @@ public struct Clip: Equatable, Sendable {
         self.segments = segments
         self.autoLevels = autoLevels
         self.export = export
+        self.still = still
     }
 }
 
@@ -166,16 +170,87 @@ public struct ProjectSettings: Equatable, Sendable {
     /// (half each way); 0 cuts.
     public var speakerFade: Seconds
 
+    /// A command run on each exported clip (e.g. to brand it); see `PostExport`.
+    public var postExport: PostExport?
+    /// Whether the app scans the video for faces on its own when cache/faces.tsv is
+    /// missing (front matter `defaults: { faces: off }` turns it off). Asking for a
+    /// scan by hand (Find Faces, `octoedit faces`) works either way.
+    public var findFaces: Bool
+
     public static let defaultSpeakerFade: Seconds = 0.2
 
     public init(prePad: Seconds = 0.12, postPad: Seconds = 0.18, crossfade: Seconds = 0.02, codec: Codec? = nil,
-                framing: Framing = .source, speakerFade: Seconds = Self.defaultSpeakerFade) {
+                framing: Framing = .source, speakerFade: Seconds = Self.defaultSpeakerFade, postExport: PostExport? = nil,
+                findFaces: Bool = true) {
         self.prePad = prePad
         self.postPad = postPad
         self.crossfade = crossfade
         self.codec = codec
         self.framing = framing
         self.speakerFade = speakerFade
+        self.postExport = postExport
+        self.findFaces = findFaces
+    }
+}
+
+/// Front matter `post-export: { run: <program>, args: [<arg>, …] }`: a program OctoEdit
+/// runs once per exported clip, which writes the clip's final video (a branded copy,
+/// say) from the plain one. The args may hold placeholders, filled in per clip:
+/// `{timeline}`, `{video}`, `{output}` (must be written) and `{exports}`.
+public struct PostExport: Equatable, Sendable {
+    public static let placeholders = ["{timeline}", "{video}", "{output}", "{exports}"]
+    /// What `Choose Script…` and a bare `post-export: <program>` start with.
+    public static let defaultArgs = ["{timeline}", "-o", "{output}"]
+
+    /// The program: an absolute path, `~/…`, or a path relative to the package.
+    public var run: String
+    public var args: [String]
+
+    public init(run: String, args: [String] = PostExport.defaultArgs) {
+        self.run = run
+        self.args = args
+    }
+
+    /// The program's file name, for labels ("brand-clip").
+    public var name: String { (run as NSString).lastPathComponent }
+
+    /// Whether some argument receives `{output}`; without it the program can't hand
+    /// OctoEdit a result.
+    public var writesOutput: Bool { args.contains { $0.contains("{output}") } }
+
+    /// The arguments as one line, quoting those with spaces or quotes (for display and
+    /// the app's Edit field; `splitArguments` reads it back).
+    public static func joinArguments(_ args: [String]) -> String {
+        args.map { a in
+            a.isEmpty || a.contains(where: { $0 == " " || $0 == "\"" || $0 == "'" || $0 == "\\" })
+                ? "\"" + a.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+                : a
+        }.joined(separator: " ")
+    }
+
+    /// Shell-style words: whitespace separates, '…' and "…" quote, \ escapes.
+    public static func splitArguments(_ line: String) -> [String] {
+        var out: [String] = [], word = "", inWord = false
+        var quote: Character?
+        var it = line.makeIterator()
+        while let c = it.next() {
+            if let q = quote {
+                if c == q { quote = nil }
+                else if c == "\\" && q == "\"", let n = it.next() { word.append(n) }
+                else { word.append(c) }
+            } else if c == "'" || c == "\"" {
+                quote = c; inWord = true
+            } else if c == "\\" {
+                if let n = it.next() { word.append(n) }
+                inWord = true
+            } else if c.isWhitespace {
+                if inWord { out.append(word); word = ""; inWord = false }
+            } else {
+                word.append(c); inWord = true
+            }
+        }
+        if inWord { out.append(word) }
+        return out
     }
 }
 

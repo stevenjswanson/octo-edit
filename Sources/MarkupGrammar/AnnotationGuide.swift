@@ -81,6 +81,10 @@ with a short audio crossfade.
 `{+40ms}` inside a fence. They fine-tune a cut by milliseconds and need someone to listen
 to the audio. Leave any existing ones exactly as they are.
 
+Flags after a clip's title or offset (`nolevels`, `noexport`, `still=00:58:01.233`) are the
+user's settings: copy them unchanged, and don't add them. `still=` chooses the frame for the
+clip's title card; without it one is picked automatically.
+
 ---
 
 ## 3. Optional: a note for a clip

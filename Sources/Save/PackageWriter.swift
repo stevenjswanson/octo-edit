@@ -66,6 +66,13 @@ public enum PackageWriter {
         try write(FacesFile.encode(faces), to: package.appendingPathComponent(PackageLayout.faces))
     }
 
+    /// Writes only the title-card still scores (cache/stills.tsv).
+    public static func saveStillScores(_ scores: [StillScore], to package: URL) throws {
+        try FileManager.default.createDirectory(at: package.appendingPathComponent(PackageLayout.cacheDir),
+                                                withIntermediateDirectories: true)
+        try write(StillsFile.encode(scores), to: package.appendingPathComponent(PackageLayout.stills))
+    }
+
     /// Saves a project whose video was replaced: transcript.md, plus the new video's
     /// words.tsv and waveform. The old words.tsv is kept in the cache, and the face
     /// cache (scanned from the old video) is removed.
@@ -79,8 +86,10 @@ public enum PackageWriter {
             try fm.copyItem(at: wordsURL, to: backup)
         }
         try save(project, to: package, options: Options(words: words, envelope: envelope))
-        let faces = package.appendingPathComponent(PackageLayout.faces)
-        if fm.fileExists(atPath: faces.path) { try fm.removeItem(at: faces) }
+        for cache in [PackageLayout.faces, PackageLayout.stills] {
+            let file = package.appendingPathComponent(cache)
+            if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
+        }
     }
 
     /// The source path as it should be written: relative to the package when the video

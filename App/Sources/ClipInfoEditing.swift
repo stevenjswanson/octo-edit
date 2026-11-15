@@ -100,12 +100,34 @@ extension DocumentModel {
     /// Shelf ▸ Re-export: export this clip again, as last time, with only a progress sheet.
     func reexportClip(_ id: ClipID) { reexport([id]) }
 
+    /// The clip's exported video, if its export is up to date: in its folder, the newest
+    /// .mp4 in the project's current framing (resolutions sit side by side).
+    func exportedVideo(of id: ClipID) -> URL? {
+        guard currentExports.contains(id), let name = project.exportName(of: id),
+              let exports = exporter.destination ?? ExportModel.lastFolder(package: packageURL) else { return nil }
+        let folder = exports.appendingPathComponent(name, isDirectory: true)
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey],
+                                                 options: .skipsHiddenFiles)) ?? []
+        let portrait = project.settings.framing == .portrait
+        let videos = files.filter { $0.pathExtension == "mp4" && $0.deletingPathExtension().lastPathComponent.hasSuffix("-9x16") == portrait }
+        func date(_ u: URL) -> Date { (try? u.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast }
+        return videos.max { date($0) < date($1) }
+    }
+
+    /// Shelf ▸ Show in Finder: selects the clip's up-to-date export.
+    func showExportInFinder(_ id: ClipID) {
+        guard let file = exportedVideo(of: id) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
     /// Shelf ▸ Re-export Changed: every clip whose export is out of date, in order.
     func reexportChanged() { reexport(project.clips.map(\.id).filter { needsExport[$0] != nil }) }
 
     private func reexport(_ ids: [ClipID]) {
         guard let source = sourceURL, !loadErrors, !sourceMissing, !ids.isEmpty else { return }
-        exporter.reexport(ids, project: project, source: source, package: packageURL, faces: faces)
+        exporter.reexport(ids, project: project, source: source, package: packageURL, faces: faces,
+                          stills: titleStillsForExport(project: project, source: source))
         if exporter.isExporting { reexporting = true }
     }
 }

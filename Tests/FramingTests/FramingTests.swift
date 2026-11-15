@@ -183,3 +183,95 @@ func project(_ turns: [(start: Double, end: Double, speaker: String)]) -> Projec
         #expect(narrow.width == 1)
     }
 }
+
+/// Scores from a table (by time in ms), standing in for Vision.
+struct TableScorer: StillScorer {
+    let totals: [Int: (q: Double, eyes: Double)]
+    func score(video: URL, _ requests: [(t: Seconds, near: FaceBox?)]) async throws -> [StillScore] {
+        requests.map { r in
+            let v = totals[Int((r.t * 1000).rounded())] ?? (0.6, 0)   // eyes shut unless listed
+            return StillScore(t: r.t, quality: v.q, eyes: v.eyes, mouth: 1, face: r.near)
+        }
+    }
+}
+
+@Suite struct StillPickerTests {
+    @Test func openingSpansFollowTheKeptVideo() {
+        let segs = [ResolvedSegment(start: 100, end: 104), ResolvedSegment(start: 110, end: 120)]
+        #expect(StillPicker.openingSpans(segs, seconds: 10) == [100...104, 110...116])
+        #expect(StillPicker.trim(StillPicker.openingSpans(segs, seconds: .infinity), skipping: 10) == [116...120])
+    }
+
+    @Test func theMainSpeakerSaysTheMost() throws {
+        var (_, p) = panel()
+        let id = try p.makeClip(words: 5...29)   // A's last 5 words, all of B's, 10 of A's
+        #expect(StillPicker.mainSpeaker(of: p.clip(id)!, in: p) == "A")
+        var (_, q) = panel()
+        let b = try q.makeClip(words: 10...19)
+        #expect(StillPicker.mainSpeaker(of: q.clip(b)!, in: q) == "B")
+    }
+
+    @Test func candidatesAreTheSpeakersStillFrames() throws {
+        var (faces, p) = panel()
+        let id = try p.makeClip(words: 10...19)   // B, 5–10 s
+        let labels = FaceLabels(faces: faces, project: p)
+        let cs = StillPicker.candidates(.opening, for: p.clip(id)!, in: p, faces: faces, labels: labels)
+        #expect(!cs.isEmpty)
+        // B's face (x≈0.7), mouth not mid-word, inside the clip, 0.4 s apart.
+        for c in cs {
+            #expect(abs(c.face.centerX - 0.7) < 0.05)
+            #expect(c.t >= 4.8 && c.t <= 10.2)
+        }
+        for (a, b) in zip(cs, cs.dropFirst()) { #expect(abs(a.t - b.t) >= 0.4 - 1e-9) }
+        // Nothing near the cut at 10 s.
+        faces.frames[60].change = 60
+        let cut = StillPicker.candidates(.opening, for: p.clip(id)!, in: p, faces: faces, labels: labels)
+        #expect(cut.allSatisfy { abs($0.t - 6) > 0.25 })
+    }
+
+    @Test func automaticPrefersAGoodOpeningElseTheBestThereIs() async throws {
+        var (faces, p) = panel()
+        let id = try p.makeClip(words: 10...19)   // B, 5–10 s
+        let labels = FaceLabels(faces: faces, project: p)
+        let opening = StillPicker.candidates(.opening, for: p.clip(id)!, in: p, faces: faces, labels: labels)
+        let pick = opening[min(3, opening.count - 1)]
+        // A good frame in the opening wins, even if it isn't the coarse favourite.
+        var stills = TitleStills(video: URL(fileURLWithPath: "/v.mp4"), faces: faces, project: p,
+                                 scorer: TableScorer(totals: [Int((pick.t * 1000).rounded()): (0.7, 1)]))
+        var choice = try await stills.choice(for: p.clip(id)!, in: p)
+        #expect(choice?.automatic == true && choice?.t == pick.t)
+        #expect(await stills.unsaved)
+        // A chosen still wins outright, wherever it is.
+        var q = p
+        try q.setStill(clip: id, 1.234)
+        choice = try await stills.choice(for: q.clip(id)!, in: q)
+        #expect(choice?.automatic == false && choice?.t == 1.234)
+        // Nothing good anywhere: still the best there is, not nothing.
+        stills = TitleStills(video: URL(fileURLWithPath: "/v.mp4"), faces: faces, project: p, scorer: TableScorer(totals: [:]))
+        #expect(try await stills.choice(for: p.clip(id)!, in: p) != nil)
+        _ = faces
+    }
+
+    @Test func theTalkFallbackTakesAGoodFrameNearTheClip() {
+        func c(_ t: Double) -> StillPicker.Candidate {
+            .init(t: t, face: FaceBox(x: 0.4, y: 0.2, w: 0.1, h: 0.1), coarse: 0.5, origin: .talk)
+        }
+        let cs = [c(100), c(500), c(900)]
+        let totals: [Double: Double] = [100: 0.6, 500: 0.45, 900: 0.3]
+        func score(_ t: Double) -> StillScore? { StillScore(t: t, quality: totals[t]!, eyes: 1, mouth: 1, face: cs[0].face) }
+        #expect(StillPicker.pick(cs, score: score)?.t == 100)
+        // Near 520: 500 is within 70% of the best (0.45 ≥ 0.42); 900 isn't.
+        #expect(StillPicker.pick(cs, score: score, near: 520)?.t == 500)
+        #expect(StillPicker.pick(cs, score: score, near: 880)?.t == 500)
+        // Nothing good enough: nil, so the caller looks further.
+        #expect(StillPicker.pick(cs, score: score, threshold: 0.7) == nil)
+    }
+
+    @Test func stillsFileRoundTrips() {
+        let s = [StillScore(t: 3481.233, quality: 0.612, eyes: 0.88, mouth: 0.95, face: FaceBox(x: 0.4, y: 0.2, w: 0.03, h: 0.05)),
+                 StillScore(t: 12, quality: 0, eyes: 0, mouth: 0, face: nil)]
+        let back = StillsFile.decode(StillsFile.encode(s))!
+        #expect(back.count == 2 && back[0].t == 12 && back[1].face?.x == 0.4 && back[1].quality == 0.612)
+        #expect(StillsFile.decode("garbage") == nil)
+    }
+}

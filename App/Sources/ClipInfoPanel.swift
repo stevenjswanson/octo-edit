@@ -10,61 +10,66 @@ struct ClipInfoPanel: View {
 
     @State private var name = ""
     @State private var notes = ""
+    @State private var pickingStill = false
     @FocusState private var focus: Field?
     private enum Field { case name, notes }
 
     var body: some View {
         let clip = model.project.clip(clipID)
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Clip").font(.headline)
-            HStack(spacing: 6) {
-                TextField("Clip name", text: $name)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focus, equals: .name)
-                    .onSubmit { commitName() }
-                if model.suggesting.contains(clipID) {
-                    ProgressView().controlSize(.small).frame(width: 28)
-                } else {
-                    Button { model.suggestNames(for: clipID) } label: { Image(systemName: "sparkles") }
-                        .help("Suggest names (⌥⌘N)")
-                        .disabled(!model.canEdit)
-                }
-            }
-            if let suggestions = clip?.suggestions, !suggestions.isEmpty {
-                Menu {
-                    ForEach(suggestions, id: \.self) { s in
-                        Button(s) {
-                            name = s
-                            model.rename(clipID, to: s)
-                        }
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Clip").font(.headline)
+                HStack(spacing: 6) {
+                    TextField("Clip name", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focus, equals: .name)
+                        .onSubmit { commitName() }
+                    if model.suggesting.contains(clipID) {
+                        ProgressView().controlSize(.small).frame(width: 28)
+                    } else {
+                        Button { model.suggestNames(for: clipID) } label: { Image(systemName: "sparkles") }
+                            .help("Suggest names (⌥⌘N)")
+                            .disabled(!model.canEdit)
                     }
-                } label: { Text("Suggestions") }
-                .fixedSize()
-                .disabled(!model.canEdit)
-            }
-            Text("File: \(model.project.slug(of: clipID) ?? "")" + ".mp4"
-                 + (model.preview.clipID == clipID && model.preview.duration > 0 ? " · " + ClipShelf.duration(model.preview.duration) : ""))
-                .font(.caption).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
-            Toggle("Auto levels", isOn: Binding(get: { clip?.autoLevels ?? false },
-                                                set: { model.setAutoLevels(clipID, $0) }))
-                .toggleStyle(.checkbox).controlSize(.small)
-                .help("Even out this clip's brightness, contrast and colour, as Photos' auto-enhance does. The preview shows it; exports include it.")
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $notes)
-                    .font(.callout)
-                    .focused($focus, equals: .notes)
-                    .scrollContentBackground(.hidden)
-                    .padding(4)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
-                if notes.isEmpty && focus != .notes {
-                    Text("Notes (saved with the project; exported as the clip's .md file)")
-                        .font(.callout).foregroundStyle(.tertiary).padding(.horizontal, 9).padding(.vertical, 8)
-                        .allowsHitTesting(false)
                 }
+                if let suggestions = clip?.suggestions, !suggestions.isEmpty {
+                    Menu {
+                        ForEach(suggestions, id: \.self) { s in
+                            Button(s) {
+                                name = s
+                                model.rename(clipID, to: s)
+                            }
+                        }
+                    } label: { Text("Suggestions") }
+                    .fixedSize()
+                    .disabled(!model.canEdit)
+                }
+                Text("File: \(model.project.slug(of: clipID) ?? "")" + ".mp4"
+                     + (model.preview.clipID == clipID && model.preview.duration > 0 ? " · " + ClipShelf.duration(model.preview.duration) : ""))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                Toggle("Auto levels", isOn: Binding(get: { clip?.autoLevels ?? false },
+                                                    set: { model.setAutoLevels(clipID, $0) }))
+                    .toggleStyle(.checkbox).controlSize(.small)
+                    .help("Even out this clip's brightness, contrast and colour, as Photos' auto-enhance does. The preview shows it; exports include it.")
+                TitleStillRow(model: model, clipID: clipID, picking: $pickingStill)
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $notes)
+                        .font(.callout)
+                        .focused($focus, equals: .notes)
+                        .scrollContentBackground(.hidden)
+                        .padding(4)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                    if notes.isEmpty && focus != .notes {
+                        Text("Notes (saved with the project; exported as the clip's .md file)")
+                            .font(.callout).foregroundStyle(.tertiary).padding(.horizontal, 9).padding(.vertical, 8)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .frame(maxHeight: .infinity)
             }
-            .frame(maxHeight: .infinity)
+            TitleStillImage(model: model, clipID: clipID, picking: $pickingStill)
         }
         .disabled(!model.canEdit)
         .padding(10)

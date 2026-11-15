@@ -19,7 +19,7 @@ public enum TranscriptWriter {
     // MARK: Front matter
 
     static func frontMatter(_ p: Project) -> [String] {
-        var out = [Grammar.frontMatterFence, "octoedit: \(PackageLayout.formatVersion)", "source: \(yaml(p.source))"]
+        var out = [Grammar.frontMatterFence, "octoedit: \(p.clips.contains { $0.still != nil } ? 2 : 1)", "source: \(yaml(p.source))"]
         if let z = p.zoom {
             out.append("zoom: { file: \(yaml(z.file)), offset: \(String(format: "%.3f", z.offset)) }")
         }
@@ -29,7 +29,11 @@ public enum TranscriptWriter {
         if p.settings.speakerFade != ProjectSettings.defaultSpeakerFade {
             defaults += ", speakerFade: \(Grammar.duration(p.settings.speakerFade))"
         }
+        if !p.settings.findFaces { defaults += ", faces: off" }
         out.append(defaults + " }")
+        if let pe = p.settings.postExport {
+            out.append("post-export: { run: \(yaml(pe.run)), args: [" + pe.args.map(yaml).joined(separator: ", ") + "] }")
+        }
         let speakers = p.speakersInOrder()
         if !speakers.isEmpty { out.append("speakers: [" + speakers.map(yaml).joined(separator: ", ") + "]") }
         let slugs = p.slugs()
@@ -134,7 +138,7 @@ public enum TranscriptWriter {
             }
             var text = p.words[i].text
             if let clip = m.open[i] {
-                var marker = Grammar.clipOpen(name: clip.name, offset: clip.segments.first?.inPoint.offset, levels: clip.autoLevels, export: clip.export)
+                var marker = Grammar.clipOpen(name: clip.name, offset: clip.segments.first?.inPoint.offset, levels: clip.autoLevels, export: clip.export, still: clip.still)
                 if !clip.notes.isEmpty, let slug = slugs[clip.id] { marker += Grammar.noteReference(slug) }
                 text = marker + " " + text
             }

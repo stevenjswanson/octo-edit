@@ -174,6 +174,28 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         #expect(parse(out).project.settings.speakerFade == 0.35)
     }
 
+    @Test func postExportRoundTripsInTheFrontMatter() {
+        var p = parse(handWritten).project
+        #expect(p.settings.postExport == nil)
+        #expect(!TranscriptWriter.write(p).contains("post-export"))
+        let run = "~/UCSD/Teaching-dev/Tales of Modern Software Engineering/tools/clip-branding/brand-clip"
+        p.settings.postExport = PostExport(run: run, args: ["{timeline}", "-o", "{output}", "--title", "Q & A"])
+        let out = TranscriptWriter.write(p)
+        #expect(out.contains("post-export: { run: \(run), args: [\"{timeline}\", \"-o\", \"{output}\", \"--title\", \"Q & A\"] }"))
+        let back = parse(out)
+        #expect(back.issues.isEmpty)
+        #expect(back.project.settings.postExport == p.settings.postExport)
+    }
+
+    @Test func barePostExportProgramGetsTheDefaultArguments() {
+        let text = handWritten.replacingOccurrences(of: "defaults:", with: "post-export: tools/brand-clip\ndefaults:")
+        let r = parse(text)
+        #expect(r.issues.isEmpty)
+        #expect(r.project.settings.postExport == PostExport(run: "tools/brand-clip", args: ["{timeline}", "-o", "{output}"]))
+        let bad = parse(handWritten.replacingOccurrences(of: "defaults:", with: "post-export: { args: [x] }\ndefaults:"))
+        #expect(bad.issues.contains { $0.message.contains("post-export") })
+    }
+
     @Test func autoLevelsRoundTripOnTheClipMarker() throws {
         // On by default; `nolevels` turns it off; the old `levels` still reads as on.
         let text = handWritten.replacingOccurrences(of: "{clip \"Hiring plan\"}", with: "{clip \"Hiring plan\" levels}")
@@ -192,6 +214,39 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         #expect(TranscriptWriter.write(flagged.project).contains("{clip \"Welcome\" -200ms nolevels noexport}"))
         let bad = parse("[00:00:01.0]\nHi {clip \"X\" sideways} there {/clip}\n")
         #expect(bad.issues.contains { $0.severity == .error })
+    }
+
+    @Test func stillRoundTripsOnTheClipMarkerAndBumpsTheFormat() throws {
+        // An old file (no still=) reads and writes as version 1, unchanged.
+        let old = parse(handWritten)
+        #expect(old.issues.isEmpty && old.project.clips.allSatisfy { $0.still == nil })
+        #expect(TranscriptWriter.write(old.project).hasPrefix("---\noctoedit: 1\n"))
+        // still= after the offset, among the other flags in any order.
+        let text = handWritten.replacingOccurrences(of: "{clip \"Welcome\" -200ms}",
+                                                    with: "{clip \"Welcome\" -200ms still=00:58:01.233 nolevels}")
+        let r = parse(text)
+        #expect(r.issues.isEmpty)
+        #expect(abs((r.project.clips[0].still ?? 0) - 3481.233) < 1e-9)
+        #expect(!r.project.clips[0].autoLevels)
+        let out = TranscriptWriter.write(r.project)
+        #expect(out.contains("{clip \"Welcome\" -200ms nolevels still=00:58:01.233}"))
+        #expect(out.hasPrefix("---\noctoedit: 2\n"))
+        // A version 2 file reads without a warning; it round-trips exactly.
+        let again = parse(out)
+        #expect(again.issues.isEmpty)
+        #expect(TranscriptWriter.write(again.project) == out)
+        // Going back to automatic drops the flag and the version.
+        var p = again.project
+        try p.setStill(clip: p.clips[0].id, nil)
+        #expect(TranscriptWriter.write(p).hasPrefix("---\noctoedit: 1\n"))
+        // Malformed or repeated: an error, not a silent automatic pick.
+        for bad in ["still=58:01", "still=soon", "still=00:00:01.0 still=00:00:02.0"] {
+            let r = parse("[00:00:01.0]\nHi {clip \"X\" \(bad)} there {/clip}\n")
+            #expect(r.issues.contains { $0.severity == .error }, "\(bad)")
+        }
+        // Newer than this build: a warning.
+        let newer = parse(handWritten.replacingOccurrences(of: "octoedit: 1", with: "octoedit: 3"))
+        #expect(newer.issues.contains { $0.message.contains("newer") })
     }
 
     @Test func movedMarkerMovesTheBoundary() {
@@ -354,6 +409,23 @@ func word(_ p: Project, _ text: String, occurrence: Int = 0) -> Int {
         let back = TranscriptReader.parse(out, timedWords: timedWords(for: handWritten)).project
         #expect(back.speakers == ["Dean Chen", "Steve Swanson", "Mia Minnes"])
         #expect(back.clips == p.clips)
+    }
+
+    @Test func facesOffRoundTripsAndOnIsTheDefault() {
+        var p = parse(handWritten).project
+        #expect(p.settings.findFaces)
+        #expect(!TranscriptWriter.write(p).contains("faces"))
+        p.settings.findFaces = false
+        let out = TranscriptWriter.write(p)
+        #expect(out.contains("crossfade: 20ms, faces: off }"))
+        #expect(!parse(out).project.settings.findFaces)
+        for (value, on) in [("on", true), ("off", false), ("\"off\"", false), ("true", true), ("false", false)] {
+            let r = parse(handWritten.replacingOccurrences(of: "crossfade: 20ms }", with: "crossfade: 20ms, faces: \(value) }"))
+            #expect(!r.hasErrors, "\(value): \(r.issues)")
+            #expect(r.project.settings.findFaces == on, "\(value)")
+        }
+        let bad = parse(handWritten.replacingOccurrences(of: "crossfade: 20ms }", with: "crossfade: 20ms, faces: sometimes }"))
+        #expect(bad.issues.contains { $0.severity == .error && $0.message.contains("faces") })
     }
 
     @Test func framingRoundTripsQuotedAndAcceptsBare() throws {

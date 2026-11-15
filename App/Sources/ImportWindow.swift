@@ -11,7 +11,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     let model = ImportModel()
 
     private init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 440),
                               styleMask: [.titled, .closable], backing: .buffered, defer: true)
         window.title = "Import Video"
         super.init(window: window)
@@ -82,9 +82,16 @@ struct ImportView: View {
         VStack(alignment: .leading, spacing: 16) {
             Form {
                 fileRow("Video", model.video, placeholder: "None", action: controller.chooseVideo)
-                fileRow("Zoom transcript", model.zoom, placeholder: "None (no speakers)", action: controller.chooseZoom,
+                fileRow("Zoom transcript", model.zoom, placeholder: "None", action: controller.chooseZoom,
                         clear: model.zoom == nil ? nil : { model.zoom = nil })
                 fileRow("Save as", model.destination, placeholder: "—", action: controller.chooseDestination)
+                Toggle("Identify speakers", isOn: $model.identifySpeakers)
+                    .help("Find who speaks when from the voices: every voice change starts a paragraph")
+                TextField("Speakers", text: $model.roster, prompt: Text("Optional: Mia Minnes, Kathy, Steve Swanson"))
+                    .disabled(!model.identifySpeakers)
+                    .help("Names the voices may be given, comma-separated. Voices that don’t match become Speaker 1, 2, …")
+                Toggle("Find faces", isOn: $model.findFaces)
+                    .help("After import, scan the video for faces in the background: speaker portraits and 9:16 framing that follows the speaker")
                 if model.destinationExists {
                     Text("A project with this name exists and will be replaced.")
                         .font(.caption).foregroundStyle(.orange)
@@ -111,7 +118,8 @@ struct ImportView: View {
     @ViewBuilder private var status: some View {
         switch model.phase {
         case .editing:
-            Text("Transcribes on this Mac — about 1½ minutes per hour of video.")
+            Text("Transcribes on this Mac — about 2 minutes per hour of video."
+                 + (model.findFaces ? " Faces are found after the project opens (about 20 minutes per hour of 4K)." : ""))
                 .font(.caption).foregroundStyle(.secondary)
         case .running(let stage, let fraction):
             VStack(alignment: .leading, spacing: 4) {
