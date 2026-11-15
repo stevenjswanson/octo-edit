@@ -46,7 +46,7 @@ final class StillStore {
     @ObservationIgnored private var saveTask: Task<Void, Never>?
 
     func reset() {
-        entries = [:]; options = [:]; images = [:]; working = []; loadingOptions = []
+        entries = [:]; options = [:]; images = [:]; working = []; loadingOptions = []; latest = [:]
         scores = nil; problem = nil
     }
 
@@ -86,15 +86,25 @@ final class StillStore {
 
     func noFaces(_ why: String) { problem = why }
 
+    /// The key of the newest refresh asked for, per clip; an older one that finishes
+    /// late is thrown away.
+    @ObservationIgnored private var latest: [ClipID: Int] = [:]
+
     /// Works out the clip's still (and its thumbnail) unless it is already up to date.
+    /// A newer request supersedes one still running.
     func refresh(_ i: Inputs) {
         problem = nil
         let id = i.clip.id
-        guard entries[id]?.key != i.key, !working.contains(id) else { return }
+        guard entries[id]?.key != i.key, latest[id] != i.key else { return }
+        latest[id] = i.key
         working.insert(id)
+        // Show the picker's thumbnail of the new frame at once, until the full one is drawn.
+        if let t = i.clip.still ?? entries[id]?.automatic?.t, let quick = images[Int((t * 1000).rounded())] {
+            entries[id]?.image = quick
+        }
         let s = stills(i)
         Task {
-            defer { working.remove(id) }
+            defer { if latest[id] == i.key { working.remove(id); latest[id] = nil } }
             do {
                 let auto = try await s.automaticChoice(for: i.clip, in: i.project)
                 let chosen = i.clip.still == nil ? nil : try await s.choice(for: i.clip, in: i.project)
@@ -103,16 +113,15 @@ final class StillStore {
                     let levels = i.clip.autoLevels
                         ? try? await StillImage.levels(source: i.source, segments: i.project.resolvedSegments(of: i.clip)) : nil
                     if let cg = try? await StillImage.render(source: i.source, at: c.t, faceX: c.face?.centerX,
-                                                             framing: i.project.settings.framing, levels: levels, maxHeight: 480) {
+                                                             framing: i.project.settings.framing, levels: levels, maxHeight: 960) {
                         entry.image = NSImage(cgImage: cg, size: .zero)
                     }
                 }
-                entries[id] = entry
                 await absorb(s, package: i.package)
-                // The clip changed while this ran: go again.
-                if entries[id]?.key != i.key { entries[id] = nil }
+                guard latest[id] == i.key else { return }   // the clip changed meanwhile
+                entries[id] = entry
             } catch {
-                problem = "Couldn't pick a still: \(error.localizedDescription)"
+                if latest[id] == i.key { problem = "Couldn't pick a still: \(error.localizedDescription)" }
             }
         }
     }
@@ -137,7 +146,7 @@ final class StillStore {
             }
             for o in wanted where images[o.id] == nil {
                 guard let cg = try? await StillImage.render(source: i.source, at: o.t, faceX: o.face?.centerX,
-                                                            framing: i.project.settings.framing, levels: nil, maxHeight: 320)
+                                                            framing: i.project.settings.framing, levels: nil, maxHeight: 640)
                 else { continue }
                 images[o.id] = NSImage(cgImage: cg, size: .zero)
             }

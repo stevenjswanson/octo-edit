@@ -154,7 +154,7 @@ struct StillPickerView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(14)
-        .frame(width: 600, height: 560)
+        .frame(width: 940, height: 780)
     }
 
     struct Tile: Identifiable {
@@ -179,7 +179,7 @@ struct StillPickerView: View {
     @ViewBuilder private func section(_ title: String, _ tiles: [Tile]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.subheadline.weight(.semibold))
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 8)], alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], alignment: .leading, spacing: 8) {
                 ForEach(tiles) { tile in
                     Button {
                         model.setStill(clipID, tile.automatic ? nil : tile.t)
@@ -187,12 +187,12 @@ struct StillPickerView: View {
                         close()
                     } label: {
                         VStack(spacing: 2) {
-                            StillThumb(image: tile.image, loading: tile.image == nil, height: 150)
+                            StillThumb(image: tile.image, loading: tile.image == nil, height: 280)
                                 .overlay(RoundedRectangle(cornerRadius: 5)
                                     .stroke(tile.chosen ? Color.accentColor : .clear, lineWidth: 3))
                             HStack(spacing: 3) {
                                 Circle().fill(Self.color(tile.score)).frame(width: 6, height: 6)
-                                Text(StillTime.label(tile.t)).font(.caption2.monospacedDigit())
+                                Text(StillTime.label(tile.t)).font(.caption.monospacedDigit())
                             }
                         }
                     }
