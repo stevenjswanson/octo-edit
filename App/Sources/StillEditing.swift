@@ -25,6 +25,8 @@ final class StillStore {
     struct Option: Identifiable {
         var t: Seconds
         var origin: StillPicker.Candidate.Origin
+        /// Whose face; nil for the clip's main-speaker lists (opening, clip, talk).
+        var speaker: String?
         var score: StillScore?
         var face: FaceBox?
         var id: Int { Int((t * 1000).rounded()) }
@@ -35,6 +37,8 @@ final class StillStore {
     private(set) var working: Set<ClipID> = []
     /// The picker's candidates per clip, with the key they were made for.
     private(set) var options: [ClipID: (key: Int, list: [Option])] = [:]
+    /// Per clip, the labelled speakers in picker order (main speaker first).
+    private(set) var people: [ClipID: [String]] = [:]
     private(set) var loadingOptions: Set<ClipID> = []
     /// Picker thumbnails by source time in milliseconds.
     private(set) var images: [Int: NSImage] = [:]
@@ -46,7 +50,7 @@ final class StillStore {
     @ObservationIgnored private var saveTask: Task<Void, Never>?
 
     func reset() {
-        entries = [:]; options = [:]; images = [:]; working = []; loadingOptions = []; latest = [:]
+        entries = [:]; options = [:]; people = [:]; images = [:]; working = []; loadingOptions = []; latest = [:]
         scores = nil; problem = nil
     }
 
@@ -134,22 +138,39 @@ final class StillStore {
         let s = stills(i)
         Task {
             defer { loadingOptions.remove(id) }
+            // The clip's main speaker (opening, rest of the clip, the talk) first, then
+            // every other labelled speaker's best frames, each shown as soon as scored.
             guard let found = try? await s.candidates(for: i.clip, in: i.project) else { return }
-            let list = found.map { Option(t: $0.candidate.t, origin: $0.candidate.origin, score: $0.score,
+            var list = found.map { Option(t: $0.candidate.t, origin: $0.candidate.origin, score: $0.score,
                                           face: $0.score?.face ?? $0.candidate.face) }
             options[id] = (i.key, list)
+            await drawImages(list, i)
+            let order = StillPicker.speakers(for: i.clip, in: i.project, labels: i.labels ?? s.labelsForPicker)
+            people[id] = order
+            let main = StillPicker.mainSpeaker(of: i.clip, in: i.project)
+            for person in order where person != main {
+                guard let theirs = try? await s.candidates(of: person, for: i.clip, in: i.project) else { continue }
+                let more = theirs.map { Option(t: $0.candidate.t, origin: $0.candidate.origin, speaker: person, score: $0.score,
+                                               face: $0.score?.face ?? $0.candidate.face) }
+                    .filter { o in !list.contains { abs($0.t - o.t) < 0.0005 } }
+                list += more
+                options[id] = (i.key, list)
+                await drawImages(more, i)
+            }
             await absorb(s, package: i.package)
-            var wanted = list
             // A chosen still that isn't a candidate gets a thumbnail too.
             if let c = i.clip.still, !list.contains(where: { abs($0.t - c) < 0.0005 }), let e = entries[id]?.chosen {
-                wanted.append(Option(t: c, origin: .talk, score: e.score, face: e.face))
+                await drawImages([Option(t: c, origin: .talk, score: e.score, face: e.face)], i)
             }
-            for o in wanted where images[o.id] == nil {
-                guard let cg = try? await StillImage.render(source: i.source, at: o.t, faceX: o.face?.centerX,
-                                                            framing: i.project.settings.framing, levels: nil, maxHeight: 640)
-                else { continue }
-                images[o.id] = NSImage(cgImage: cg, size: .zero)
-            }
+        }
+    }
+
+    private func drawImages(_ wanted: [Option], _ i: Inputs) async {
+        for o in wanted where images[o.id] == nil {
+            guard let cg = try? await StillImage.render(source: i.source, at: o.t, faceX: o.face?.centerX,
+                                                        framing: i.project.settings.framing, levels: nil, maxHeight: 640)
+            else { continue }
+            images[o.id] = NSImage(cgImage: cg, size: .zero)
         }
     }
 }

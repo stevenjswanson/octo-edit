@@ -202,13 +202,14 @@ struct TableScorer: StillScorer {
         #expect(StillPicker.trim(StillPicker.openingSpans(segs, seconds: .infinity), skipping: 10) == [116...120])
     }
 
-    @Test func theMainSpeakerSaysTheMost() throws {
+    @Test func theMainSpeakerIsTheFirstToSpeak() throws {
         var (_, p) = panel()
         let id = try p.makeClip(words: 5...29)   // A's last 5 words, all of B's, 10 of A's
         #expect(StillPicker.mainSpeaker(of: p.clip(id)!, in: p) == "A")
         var (_, q) = panel()
-        let b = try q.makeClip(words: 10...19)
-        #expect(StillPicker.mainSpeaker(of: q.clip(b)!, in: q) == "B")
+        let b = try q.makeClip(words: 8...29)    // A's last 2 words, then B says the most
+        #expect(StillPicker.mainSpeaker(of: q.clip(b)!, in: q) == "A")
+        #expect(StillPicker.speakingOrder(of: q.clip(b)!, in: q) == ["A", "B"])
     }
 
     @Test func candidatesAreTheSpeakersStillFrames() throws {
@@ -249,6 +250,26 @@ struct TableScorer: StillScorer {
         // Nothing good anywhere: still the best there is, not nothing.
         stills = TitleStills(video: URL(fileURLWithPath: "/v.mp4"), faces: faces, project: p, scorer: TableScorer(totals: [:]))
         #expect(try await stills.choice(for: p.clip(id)!, in: p) != nil)
+        _ = faces
+    }
+
+    @Test func everyLabelledSpeakerGetsCandidatesMainSpeakerFirst() async throws {
+        var (faces, p) = panel()
+        let id = try p.makeClip(words: 10...19)   // B, 5–10 s
+        let labels = FaceLabels(faces: faces, project: p)
+        #expect(StillPicker.speakers(for: p.clip(id)!, in: p, labels: labels) == ["B", "A"])
+        // A's own frames, anywhere: A's face in each, in the clip first.
+        let a = StillPicker.candidates(of: "A", for: p.clip(id)!, in: p, faces: faces, labels: labels)
+        #expect(!a.isEmpty && a.allSatisfy { $0.speaker == "A" })
+        for c in a { #expect(abs(c.face.centerX - (labels.face(of: "A", at: c.t)?.centerX ?? -1)) < 0.05) }
+        #expect(a.first?.origin == .clip)
+        // Scored for A's face, so choosing one frames A.
+        let stills = TitleStills(video: URL(fileURLWithPath: "/v.mp4"), faces: faces, project: p, scorer: TableScorer(totals: [:]))
+        let scored = try await stills.candidates(of: "A", for: p.clip(id)!, in: p)
+        var q = p
+        try q.setStill(clip: id, scored[0].candidate.t)
+        let pick = try await stills.choice(for: q.clip(id)!, in: q)
+        #expect(abs((pick?.face?.centerX ?? -1) - scored[0].candidate.face.centerX) < 1e-9)
         _ = faces
     }
 

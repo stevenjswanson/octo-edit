@@ -140,12 +140,21 @@ struct StillPickerView: View {
                         section("Chosen", [Tile(t: t, score: store.entries[clipID]?.chosen?.score,
                                                 image: store.images[Self.ms(t)] ?? store.entries[clipID]?.image, chosen: true)])
                     }
+                    if let main = clip.flatMap({ StillPicker.mainSpeaker(of: $0, in: model.project) }) {
+                        Text(main).font(.title3.weight(.semibold)).padding(.top, 4)
+                    }
                     ForEach([StillPicker.Candidate.Origin.opening, .clip, .talk], id: \.self) { origin in
-                        let tiles = options.filter { $0.origin == origin }.map { o in
-                            Tile(t: o.t, score: o.score, image: store.images[o.id],
-                                 chosen: clip?.still.map { abs($0 - o.t) < 0.0005 } ?? false)
-                        }
+                        let tiles = options.filter { $0.speaker == nil && $0.origin == origin }.map { tile($0, clip) }
                         if !tiles.isEmpty { section(Self.title(origin), tiles) }
+                    }
+                    ForEach(store.people[clipID] ?? [], id: \.self) { person in
+                        let tiles = options.filter { $0.speaker == person }
+                            .sorted { ($0.score?.total ?? 0) > ($1.score?.total ?? 0) }.map { tile($0, clip) }
+                        if !tiles.isEmpty {
+                            Divider()
+                            Text(person).font(.title3.weight(.semibold))
+                            section("Best frames (in this clip first, then the talk)", tiles)
+                        }
                     }
                 }
                 .padding(.trailing, 6)
@@ -164,6 +173,11 @@ struct StillPickerView: View {
         var chosen: Bool
         var automatic = false
         var id: String { (automatic ? "a" : "") + String(Int((t * 1000).rounded())) }
+    }
+
+    private func tile(_ o: StillStore.Option, _ clip: Clip?) -> Tile {
+        Tile(t: o.t, score: o.score, image: model.stills.images[o.id],
+             chosen: clip?.still.map { abs($0 - o.t) < 0.0005 } ?? false)
     }
 
     static func ms(_ t: Seconds) -> Int { Int((t * 1000).rounded()) }

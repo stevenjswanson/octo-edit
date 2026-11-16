@@ -14,8 +14,9 @@ struct StillsCommand: AsyncParsableCommand {
         abstract: "Show or choose each clip's title-card still.",
         discussion: """
         A clip's title card (brand-clip's .titlecard.png) is drawn over one frame of its
-        main speaker. `still=hh:mm:ss.mmm` on the clip's marker chooses it, as a time in
-        the source recording (anywhere in the talk):
+        main speaker, the first to speak in it (or of anyone, when chosen).
+        `still=hh:mm:ss.mmm` on the clip's marker chooses it, as a time in the source
+        recording (anywhere in the talk):
 
           {clip "How has software engineering changed?" +645ms still=00:58:01.233}
 
@@ -29,7 +30,8 @@ struct StillsCommand: AsyncParsableCommand {
         with Vision and remembered in cache/stills.tsv.
 
         With no options, lists every clip's still. --clip SLUG lists that clip's
-        candidates instead. --set SLUG=TIME chooses one (TIME as hh:mm:ss.mmm, a
+        candidates instead: its main speaker's, then each other speaker with a
+        labelled face (their best frames in the clip, then in the talk). --set SLUG=TIME chooses one (TIME as hh:mm:ss.mmm, a
         candidate's number from --clip, or `auto` to go back to the automatic pick)
         and saves transcript.md. --images DIR writes each still as a JPEG there.
 
@@ -69,6 +71,16 @@ struct StillsCommand: AsyncParsableCommand {
         let stills = TitleStills(video: loaded.sourceURL, faces: faces, project: p, scorer: VisionStillScorer(),
                                  scores: PackageReader.loadStillScores(pkg))
         let slugs = p.slugs()
+        /// The clip's candidates: its main speaker's, then every other labelled speaker's.
+        func allCandidates(_ c: Clip) async throws -> [(candidate: StillPicker.Candidate, score: StillScore?)] {
+            var out = try await stills.candidates(for: c, in: p)
+            let main = StillPicker.mainSpeaker(of: c, in: p)
+            for person in StillPicker.speakers(for: c, in: p, labels: stills.labelsForPicker) where person != main {
+                out += try await stills.candidates(of: person, for: c, in: p)
+                    .filter { o in !out.contains { abs($0.candidate.t - o.candidate.t) < 0.0005 } }
+            }
+            return out
+        }
         func find(_ slug: String) throws -> Clip {
             guard let c = p.clips.first(where: { slugs[$0.id] == slug }) else {
                 throw ValidationError("no clip named \(slug); clips are: " + p.clips.compactMap { slugs[$0.id] }.joined(separator: ", "))
@@ -84,7 +96,7 @@ struct StillsCommand: AsyncParsableCommand {
                 let t: Seconds?
                 if value == "auto" { t = nil }
                 else if let n = Int(value) {
-                    let cs = try await stills.candidates(for: c, in: p)
+                    let cs = try await allCandidates(c)
                     guard (1...cs.count).contains(n) else { throw ValidationError("\(slugs[c.id]!) has \(cs.count) candidates") }
                     t = cs[n - 1].candidate.t
                 } else if let v = Grammar.parseTimestamp(value) { t = v }
@@ -113,12 +125,18 @@ struct StillsCommand: AsyncParsableCommand {
         var rows: [[String: Any]] = []
         if let slug = clip {
             let c = try find(slug)
-            let cs = try await stills.candidates(for: c, in: p)
+            let cs = try await allCandidates(c)
             let pick = try await stills.choice(for: c, in: p)
+            let main = StillPicker.mainSpeaker(of: c, in: p)
+            var heading: String?? = .none
             for (n, (cand, score)) in cs.enumerated() {
+                if !json, heading != .some(cand.speaker) {
+                    heading = .some(cand.speaker)
+                    print("— " + (cand.speaker ?? main ?? "main speaker") + (cand.speaker == nil || cand.speaker == main ? " (main speaker)" : ""))
+                }
                 let chosen = pick.map { abs($0.t - cand.t) < 0.0005 } ?? false
                 let file = try await image(String(format: "%@-%02d", slug, n + 1), cand.t, score?.face ?? cand.face, c)
-                rows.append(["n": n + 1, "time": Grammar.preciseTimestamp(cand.t), "seconds": cand.t, "from": cand.origin.rawValue,
+                rows.append(["n": n + 1, "time": Grammar.preciseTimestamp(cand.t), "seconds": cand.t, "from": cand.origin.rawValue, "speaker": cand.speaker ?? NSNull(),
                              "coarse": cand.coarse, "score": score?.total ?? 0, "chosen": chosen, "image": file ?? NSNull()])
                 if !json {
                     print(String(format: "%2d %@ %@  %-7@ coarse %.2f  %@%@", n + 1, chosen ? "*" : " ",

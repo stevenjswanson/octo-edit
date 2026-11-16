@@ -1,7 +1,8 @@
 import Foundation
 import Core
 
-/// The title card's picture for a clip: a frame of its main speaker looking their best.
+/// The title card's picture for a clip: a frame of its main speaker (the first to
+/// speak in it) looking their best.
 ///
 /// Two passes, so a whole talk is never decoded again:
 /// 1. **Coarse**, from cache/faces.tsv alone: frames where the clip's main speaker's face
@@ -32,22 +33,57 @@ public enum StillPicker {
         /// The coarse score, 0…1.
         public var coarse: Double
         public var origin: Origin
+        /// Whose face this is (nil without face labels: the largest face).
+        public var speaker: String?
+
+        public init(t: Seconds, face: FaceBox, coarse: Double, origin: Origin, speaker: String? = nil) {
+            self.t = t; self.face = face; self.coarse = coarse; self.origin = origin; self.speaker = speaker
+        }
     }
 
-    /// The speaker who says the most in the clip (by kept, timed words).
-    public static func mainSpeaker(of clip: Clip, in p: Project) -> String? {
+    /// The clip's speakers in the order they first speak (by kept, timed words).
+    public static func speakingOrder(of clip: Clip, in p: Project) -> [String] {
         let segments = p.resolvedSegments(of: clip)
-        guard let range = p.indexRange(of: clip) else { return nil }
+        guard let range = p.indexRange(of: clip) else { return [] }
         var speakerOf: [ParagraphID: String] = [:]
         for para in p.paragraphs { if let s = para.speaker { speakerOf[para.id] = s } }
-        var said: [String: Seconds] = [:]
+        var out: [String] = []
         for i in range {
             let w = p.words[i]
-            guard let a = w.start, let b = w.end, let s = speakerOf[w.paragraph],
+            guard let a = w.start, let b = w.end, let s = speakerOf[w.paragraph], !out.contains(s),
                   segments.contains(where: { $0.start <= a && b <= $0.end }) else { continue }
-            said[s, default: 0] += b - a
+            out.append(s)
         }
-        return said.max { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }?.key
+        return out
+    }
+
+    /// The clip's main speaker, whose face the title card shows: the first to speak in it.
+    public static func mainSpeaker(of clip: Clip, in p: Project) -> String? {
+        speakingOrder(of: clip, in: p).first
+    }
+
+    /// Every speaker with a labelled face, for the picker: the clip's speakers in the
+    /// order they first speak (so the main speaker first), then the rest in roster order.
+    public static func speakers(for clip: Clip, in p: Project, labels: FaceLabels?) -> [String] {
+        guard let labels else { return [] }
+        let labelled = Set(labels.tracks.compactMap(\.speaker))
+        let inClip = speakingOrder(of: clip, in: p)
+        let roster = inClip + p.speakers + labelled.sorted()
+        var out: [String] = []
+        for s in roster where labelled.contains(s) && !out.contains(s) { out.append(s) }
+        return out
+    }
+
+    /// One speaker's candidates for a clip's picker, best (coarse) first: up to 6 of
+    /// their frames inside the clip (1 s apart), then up to 10 from the rest of the talk
+    /// (10 s apart). For anyone, not only the clip's main speaker.
+    public static func candidates(of speaker: String, for clip: Clip, in p: Project, faces: FaceTracks,
+                                  labels: FaceLabels) -> [Candidate] {
+        let inClip = best(faces, labels, speaker, within: openingSpans(p.resolvedSegments(of: clip), seconds: .infinity),
+                          spacing: 1, limit: 6, origin: .clip)
+        let talk = best(faces, labels, speaker, within: nil, spacing: 10, limit: 10 + inClip.count, origin: .talk)
+            .filter { c in !inClip.contains { abs($0.t - c.t) < 1 } }
+        return inClip + talk.prefix(10)
     }
 
     /// Source-time spans covering the first `seconds` of the clip's kept video.
@@ -144,7 +180,7 @@ public enum StillPicker {
         for (i, box, s) in ranked where s > 0 {
             let t = frames[i].t
             if out.contains(where: { abs($0.t - t) < spacing }) { continue }
-            out.append(Candidate(t: t, face: box, coarse: s, origin: origin))
+            out.append(Candidate(t: t, face: box, coarse: s, origin: origin, speaker: labels == nil ? nil : speaker))
             if out.count == limit { break }
         }
         return out
@@ -238,6 +274,9 @@ public actor TitleStills {
 
     public func markSaved() { unsaved = false }
 
+    /// The face labels in use (worked out from the faces when none were given).
+    public nonisolated var labelsForPicker: FaceLabels? { labels }
+
     /// The clip's candidates from the given places, each with its fine score (scoring
     /// any not yet scored), the fine score's best first within each place.
     public func candidates(for clip: Clip, in p: Project, from origins: [StillPicker.Candidate.Origin] = StillPicker.Candidate.Origin.allCases)
@@ -250,6 +289,21 @@ public actor TitleStills {
             out += cs.map { ($0, scores[Self.key($0.t)]) }.sorted { ($0.1?.total ?? 0) > ($1.1?.total ?? 0) }
         }
         return out
+    }
+
+    /// One speaker's candidates for the clip's picker (`StillPicker.candidates(of:)`),
+    /// each with its fine score, best first. A frame already scored for someone else's
+    /// face is left out, so a chosen still keeps the face it was chosen for (the score
+    /// cache remembers one face per frame).
+    public func candidates(of speaker: String, for clip: Clip, in p: Project) async throws
+    -> [(candidate: StillPicker.Candidate, score: StillScore?)] {
+        guard let labels else { return [] }
+        let cs = StillPicker.candidates(of: speaker, for: clip, in: p, faces: faces, labels: labels).filter { c in
+            guard let face = scores[Self.key(c.t)]?.face else { return true }
+            return StillPicker.dist(face, c.face) < c.face.w
+        }
+        try await ensure(cs.map { ($0.t, $0.face) })
+        return cs.map { ($0, scores[Self.key($0.t)]) }.sorted { ($0.1?.total ?? 0) > ($1.1?.total ?? 0) }
     }
 
     /// The clip's still: its `still=` if it has one, else the automatic pick. Nil when
