@@ -130,10 +130,21 @@ public struct FaceLabels: Sendable {
 
     // MARK: Labels
 
+    /// Mouth activity (mean change of the mouth's open ÷ width per sample, over ±0.5 s)
+    /// below which a face isn't talking. A still face jitters at 0.01–0.02; a speaker
+    /// talking measures 0.04–0.10 (Roy Guo's talk: median 0.059, 10th percentile 0.027).
+    static let talking = 0.025
+
+    /// The name with the most votes (ties to the first name alphabetically).
+    static func top(_ votes: [String: Int]) -> (String, Int)? {
+        votes.max(by: { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }).map { ($0.key, $0.value) }
+    }
+
     /// Per sampled frame with someone speaking, the face whose mouth moves most (by a
-    /// 1.3× margin over the next) votes for that speaker. Votes are pooled by seat: the
-    /// camera keeps coming back to the same framing and people stay in their chairs, so
-    /// tracks at the same place and size in any shot are one person. A seat takes the
+    /// 1.3× margin over the next, and at least `talking`) votes for that speaker. Votes
+    /// are pooled by seat: the camera keeps coming back to the same framing and people
+    /// stay in their chairs, so tracks at the same place and size in any shot are one
+    /// person — unless a track's own votes clearly name someone else. A seat takes the
     /// speaker it won most often, if it won at least a second's worth and at least half
     /// the frames it was on screen while that speaker talked; in one shot, two seats
     /// can't both be the same speaker (the one with more votes keeps it).
@@ -159,7 +170,9 @@ public struct FaceLabels: Sendable {
             guard let speaker = voices.speaker(at: f.t), let faces = activity[f.t], !faces.isEmpty else { continue }
             for a in faces { heard[a.track, default: [:]][speaker, default: 0] += 1 }
             let ranked = faces.sorted { $0.act > $1.act }
-            if ranked.count == 1 || ranked[0].act > 1.3 * ranked[1].act {
+            // Only a moving mouth votes: a listener alone on screen while someone
+            // off-camera talks must not win their words.
+            if ranked[0].act >= Self.talking, ranked.count == 1 || ranked[0].act > 1.3 * ranked[1].act {
                 won[ranked[0].track, default: [:]][speaker, default: 0] += 1
             }
         }
@@ -174,9 +187,15 @@ public struct FaceLabels: Sendable {
         var votes = [Int](repeating: 0, count: tracks.count)
         for id in tracks.indices {
             let seat = seatOf[id]
-            guard let (name, count) = seatWon[seat]?.max(by: { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key })
-            else { continue }
-            let score = Double(count) / Double(max(seatHeard[seat]?[name] ?? 1, 1))
+            guard var (name, count) = seatWon[seat].flatMap(Self.top) else { continue }
+            var score = Double(count) / Double(max(seatHeard[seat]?[name] ?? 1, 1))
+            // A seat is only a place on screen, and different shots can frame different
+            // people there (a questioner at the mic centred just like the speaker at the
+            // podium). A track whose own mouth clearly moved for someone else is them.
+            if let (own, n) = won[id].flatMap(Self.top), own != name, n > won[id]?[name] ?? 0, 2 * n >= minimum {
+                (name, count) = (own, n)
+                score = Double(n) / Double(max(heard[id]?[own] ?? 1, 1))
+            }
             tracks[id].score = score
             votes[id] = count
             if count >= minimum, score >= 0.5 { tracks[id].speaker = name }

@@ -98,8 +98,8 @@ public enum StillPicker {
     }
 
     /// The clip's candidates from one place, best (coarse) first: up to 16 from its
-    /// opening (0.4 s apart), 12 from the rest of it (1 s apart), or 8 from the whole
-    /// talk (20 s apart).
+    /// opening (0.4 s apart), 12 from the rest of it (1 s apart), or the best in
+    /// each twelfth of the whole talk.
     public static func candidates(_ origin: Candidate.Origin, for clip: Clip, in p: Project, faces: FaceTracks,
                                   labels: FaceLabels?) -> [Candidate] {
         let speaker = labels == nil ? nil : mainSpeaker(of: clip, in: p)
@@ -112,7 +112,16 @@ public enum StillPicker {
             let spans = trim(openingSpans(segments, seconds: .infinity), skipping: skip)
             return best(faces, labels, speaker, within: spans, spacing: 1, limit: 12, origin: .clip)
         case .talk:
-            return best(faces, labels, speaker, within: nil, spacing: 20, limit: 8, origin: .talk)
+            // The best in each twelfth of the talk, so a clip has a frame nearby to fall
+            // back on (the steadiest frames overall tend to bunch up, in the Q&A, say).
+            guard let first = faces.frames.first?.t, let last = faces.frames.last?.t, last > first else { return [] }
+            let step: Seconds = (last - first) / 12
+            var out: [Candidate] = []
+            for k in 0..<12 {
+                let from: Seconds = first + Double(k) * step
+                out += best(faces, labels, speaker, within: [from...(from + step)], spacing: 20, limit: 1, origin: .talk)
+            }
+            return out.sorted { $0.coarse > $1.coarse }
         }
     }
 
@@ -331,8 +340,9 @@ public actor TitleStills {
             let cs = try await candidates(for: clip, in: p, from: [origin]).map(\.candidate)
             seen += cs
             let found = StillPicker.pick(cs, score: { self.scores[Self.key($0)] }, near: origin == .talk ? start : nil)
-                // Nothing good anywhere: the best there is.
-                ?? (origin == .talk ? StillPicker.pick(seen, score: { self.scores[Self.key($0)] }, threshold: 1e-9) : nil)
+                // Nothing good anywhere: of the best there is, the one nearest the clip,
+                // so clips without a good frame don't all get the same picture.
+                ?? (origin == .talk ? StillPicker.pick(seen, score: { self.scores[Self.key($0)] }, near: start, threshold: 1e-9) : nil)
             if let best = found {
                 let s = scores[Self.key(best.t)]
                 return Choice(t: best.t, automatic: true, face: s?.face ?? best.face, score: s)

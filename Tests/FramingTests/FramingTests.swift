@@ -72,6 +72,34 @@ func panel() -> (FaceTracks, Project) {
         #expect(labels.face(of: "B", at: 11)?.centerX ?? 0 > 0.6)
     }
 
+    @Test func aQuestionerFramedLikeTheSpeakerIsNotTheSpeaker() {
+        // The speaker S alone at centre for 30 s, talking. Then a cut to a questioner Q
+        // at the mic, framed the same way: Q asks for 5 s, then listens, mouth still,
+        // while S answers off camera for 10 s.
+        var frames: [FaceFrame] = []
+        for k in 0..<450 {
+            let t = Double(k) / 10
+            let mouth = t < 35 ? (k % 2 == 0 ? 0.3 : 0.05) : 0.1
+            frames.append(FaceFrame(t: t, change: k == 300 ? 60 : 1,
+                                    faces: [FaceBox(x: 0.47, y: 0.25, w: 0.06, h: 0.1, mouthOpen: mouth, mouthWidth: 0.5)]))
+        }
+        let p = project([(0, 30, "S"), (30, 35, "Q"), (35, 45, "S")])
+        let labels = FaceLabels(faces: FaceTracks(width: 3840, height: 2160, frames: frames), project: p)
+        #expect(labels.face(of: "S", at: 10) != nil)
+        #expect(labels.face(of: "S", at: 40) == nil)
+        #expect(labels.face(of: "Q", at: 40) != nil)
+    }
+
+    @Test func aLoneFaceThatIsntTalkingWinsNoVotes() {
+        // One face on screen, mouth still, while someone off camera talks.
+        let frames = (0..<100).map { k in
+            FaceFrame(t: Double(k) / 10, change: k == 0 ? 60 : 1,
+                      faces: [FaceBox(x: 0.47, y: 0.25, w: 0.06, h: 0.1, mouthOpen: 0.1, mouthWidth: 0.5)])
+        }
+        let labels = FaceLabels(faces: FaceTracks(width: 3840, height: 2160, frames: frames), project: project([(0, 10, "S")]))
+        #expect(labels.tracks.allSatisfy { $0.speaker == nil })
+    }
+
     @Test func relabellingAHeaderMovesTheFace() {
         let (faces, p) = panel()
         var q = p
@@ -187,10 +215,12 @@ func project(_ turns: [(start: Double, end: Double, speaker: String)]) -> Projec
 /// Scores from a table (by time in ms), standing in for Vision.
 struct TableScorer: StillScorer {
     let totals: [Int: (q: Double, eyes: Double)]
+    /// Frames not listed: eyes shut, unless given.
+    var others: (q: Double, eyes: Double) = (0.6, 0)
     func score(video: URL, _ requests: [(t: Seconds, near: FaceBox?)]) async throws -> [StillScore] {
         requests.map { r in
-            let v = totals[Int((r.t * 1000).rounded())] ?? (0.6, 0)   // eyes shut unless listed
-            return StillScore(t: r.t, quality: v.q, eyes: v.eyes, mouth: 1, face: r.near)
+            let v = totals[Int((r.t * 1000).rounded())] ?? others
+            return StillScore(t: r.t, quality: v.q, eyes: v.eyes, lips: 0, face: r.near)
         }
     }
 }
@@ -253,6 +283,19 @@ struct TableScorer: StillScorer {
         _ = faces
     }
 
+    @Test func clipsWithNoGoodFrameStillGetTheirOwnPicture() async throws {
+        var (faces, p) = panel()
+        let early = try p.makeClip(words: 10...19)   // B, 5–10 s
+        let late = try p.makeClip(words: 30...39)    // B, 15–20 s
+        // Every frame mediocre (0.6 × 0.3 < goodEnough): nothing passes anywhere.
+        let stills = TitleStills(video: URL(fileURLWithPath: "/v.mp4"), faces: faces, project: p,
+                                 scorer: TableScorer(totals: [:], others: (0.6, 0.3)))
+        let a = try await stills.choice(for: p.clip(early)!, in: p)!, b = try await stills.choice(for: p.clip(late)!, in: p)!
+        #expect(a.t != b.t)
+        #expect((5...10).contains(a.t) && (15...20).contains(b.t))
+        _ = faces
+    }
+
     @Test func everyLabelledSpeakerGetsCandidatesMainSpeakerFirst() async throws {
         var (faces, p) = panel()
         let id = try p.makeClip(words: 10...19)   // B, 5–10 s
@@ -279,7 +322,7 @@ struct TableScorer: StillScorer {
         }
         let cs = [c(100), c(500), c(900)]
         let totals: [Double: Double] = [100: 0.6, 500: 0.45, 900: 0.3]
-        func score(_ t: Double) -> StillScore? { StillScore(t: t, quality: totals[t]!, eyes: 1, mouth: 1, face: cs[0].face) }
+        func score(_ t: Double) -> StillScore? { StillScore(t: t, quality: totals[t]!, eyes: 1, lips: 0, face: cs[0].face) }
         #expect(StillPicker.pick(cs, score: score)?.t == 100)
         // Near 520: 500 is within 70% of the best (0.45 ≥ 0.42); 900 isn't.
         #expect(StillPicker.pick(cs, score: score, near: 520)?.t == 500)
@@ -289,10 +332,27 @@ struct TableScorer: StillScorer {
     }
 
     @Test func stillsFileRoundTrips() {
-        let s = [StillScore(t: 3481.233, quality: 0.612, eyes: 0.88, mouth: 0.95, face: FaceBox(x: 0.4, y: 0.2, w: 0.03, h: 0.05)),
-                 StillScore(t: 12, quality: 0, eyes: 0, mouth: 0, face: nil)]
+        let s = [StillScore(t: 3481.233, quality: 0.612, eyes: 0.88, lips: 0.0142, face: FaceBox(x: 0.4, y: 0.2, w: 0.03, h: 0.05)),
+                 StillScore(t: 12, quality: 0, eyes: 0, lips: nil, face: nil)]
         let back = StillsFile.decode(StillsFile.encode(s))!
         #expect(back.count == 2 && back[0].t == 12 && back[1].face?.x == 0.4 && back[1].quality == 0.612)
         #expect(StillsFile.decode("garbage") == nil)
+        #expect(abs((back[1].lips ?? 0) - 0.0142) < 1e-6 && back[0].lips == nil)
+    }
+
+    @Test func versionOneStillsFilesKeepTheirLipGap() {
+        // Version 1 held exp(-max(lips - 0.004, 0) / 0.006): 0.390 is a gap of 0.0096.
+        let v1 = "# octoedit stills 1\n1.000\t0.5\t1\t0.390\t0.4\t0.2\t0.03\t0.05\n2.000\t0.5\t1\t0.000\t0.4\t0.2\t0.03\t0.05\n3.000\t0.5\t1\t1.000\t0.4\t0.2\t0.03\t0.05\n"
+        let s = StillsFile.decode(v1)!
+        #expect(abs(s[0].lips! - 0.0096) < 0.0002)
+        #expect(s[1].lips! > 0.045 && s[1].mouth < 0.02)
+        #expect(s[2].lips == 0.004 && s[2].mouth > 0.99)
+    }
+
+    @Test func closedLipsScoreClosedOnEveryFace() {
+        // Closed, measured on three speakers: 0.003–0.025; open mid-word: 0.04 and up.
+        #expect(StillScore.closedness(0.009) > 0.98)
+        #expect(StillScore.closedness(0.022) > 0.7)
+        #expect(StillScore.closedness(0.045) < 0.02)
     }
 }

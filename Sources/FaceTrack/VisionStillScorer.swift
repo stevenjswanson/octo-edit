@@ -20,7 +20,7 @@ public struct VisionStillScorer: StillScorer {
             try Task.checkCancellation()
             let time = CMTime(seconds: r.t, preferredTimescale: 600)
             guard let image = try? await gen.image(at: time).image else {
-                out.append(StillScore(t: r.t, quality: 0, eyes: 0, mouth: 0, face: nil))
+                out.append(StillScore(t: r.t, quality: 0, eyes: 0, lips: nil, face: nil))
                 continue
             }
             out.append(Self.score(image, t: r.t, near: r.near))
@@ -43,14 +43,15 @@ public struct VisionStillScorer: StillScorer {
         } else {
             found.max { $0.boundingBox.width < $1.boundingBox.width }
         }
-        guard let face = pick else { return StillScore(t: t, quality: 0, eyes: 0, mouth: 0, face: nil) }
+        guard let face = pick else { return StillScore(t: t, quality: 0, eyes: 0, lips: nil, face: nil) }
 
         let quality = VNDetectFaceCaptureQualityRequest()
         quality.inputFaceObservations = [face]
         try? handler.perform([quality])
         let q = Double(quality.results?.first?.faceCaptureQuality ?? 0)
 
-        var eyes = 0.0, mouth = 0.5
+        var eyes = 0.0
+        var lips: Double?
         if let l = face.landmarks {
             // Eye opening: height ÷ width of each eye's outline (in face-box units). Open
             // and looking at the audience is 0.30–0.38; looking down or half-shut, under
@@ -72,16 +73,12 @@ public struct VisionStillScorer: StillScorer {
                 let off = offsets.reduce(0, +) / Double(offsets.count)
                 eyes *= exp(-pow(max(off - 0.08, 0) / 0.1, 2))
             }
-            if let inner = l.innerLips?.normalizedPoints {
-                // Inner-lip height as a fraction of the face box: 0.004–0.006 closed,
-                // 0.01 parted mid-word, 0.02+ open.
-                let open = Self.extent(inner).h
-                mouth = exp(-max(open - 0.004, 0) / 0.006)
-            }
+            // Inner-lip height as a fraction of the face box (`StillScore.closedness`).
+            if let inner = l.innerLips?.normalizedPoints { lips = Self.extent(inner).h }
         }
         var b = box(face)
         if let near { b.mouthOpen = near.mouthOpen; b.mouthWidth = near.mouthWidth }
-        return StillScore(t: t, quality: q, eyes: eyes, mouth: mouth, face: b)
+        return StillScore(t: t, quality: q, eyes: eyes, lips: lips, face: b)
     }
 
     static func aspect(_ pts: [CGPoint]) -> Double {

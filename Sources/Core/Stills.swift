@@ -9,18 +9,28 @@ public struct StillScore: Equatable, Sendable {
     public var quality: Double
     /// How open the eyes are (0 closed or not found, 1 wide open).
     public var eyes: Double
-    /// How closed the mouth is (1 closed, 0 mid-word or wide open).
-    public var mouth: Double
+    /// How far apart the lips are: the inner-lip outline's height as a fraction of the
+    /// face box (nil when Vision found no lips). Kept raw so `mouth` can be retuned
+    /// without decoding the frames again.
+    public var lips: Double?
     /// The face that was scored, if one was found near the box.
     public var face: FaceBox?
 
-    public init(t: Seconds, quality: Double, eyes: Double, mouth: Double, face: FaceBox?) {
+    public init(t: Seconds, quality: Double, eyes: Double, lips: Double?, face: FaceBox?) {
         self.t = t
         self.quality = quality
         self.eyes = eyes
-        self.mouth = mouth
+        self.lips = lips
         self.face = face
     }
+
+    /// How closed the mouth is (1 closed, 0 mid-word or wide open; 0.5 when unknown).
+    public var mouth: Double { lips.map(Self.closedness) ?? 0.5 }
+
+    /// Lip gap → closedness. Measured on three speakers' faces (Taitano, Pugh, Guo):
+    /// closed lips read 0.003–0.025 (it varies a lot by face: lip shape, a resting
+    /// smile), slightly parted 0.03–0.035, open mid-word 0.04 and up. Half at 0.027.
+    public static func closedness(_ lips: Double) -> Double { 1 / (1 + exp((lips - 0.027) / 0.004)) }
 
     /// The overall score: a closed-eyed or mid-word frame loses however sharp it is.
     public var total: Double { face == nil ? 0 : quality * eyes * (0.25 + 0.75 * mouth) }

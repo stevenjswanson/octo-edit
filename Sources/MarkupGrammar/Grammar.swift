@@ -344,13 +344,16 @@ public enum FacesFile {
 /// `cache/stills.tsv`: fine scores of the exact frames considered for title-card stills,
 /// so each is decoded and judged once. Plain text:
 ///
-///     # octoedit stills 1
-///     3481.233	0.612	0.880	0.950	0.4012	0.2210	0.0310	0.0550
+///     # octoedit stills 2
+///     3481.233	0.612	0.880	0.0142	0.4012	0.2210	0.0310	0.0550
 ///
-/// Source time, quality, eyes, mouth (0…1 each), then the face box (x y w h as
-/// fractions, origin top-left), or `-` in each when no face was found.
+/// Source time, quality and eyes (0…1), the lip gap (`StillScore.lips`, `-` when
+/// unknown), then the face box (x y w h as fractions, origin top-left), or `-` in
+/// each when no face was found. Version 1 files, which held a 0…1 mouth score
+/// instead of the lip gap, are read by undoing that score's formula.
 public enum StillsFile {
-    static let magic = "# octoedit stills 1"
+    static let magic = "# octoedit stills 2"
+    static let magic1 = "# octoedit stills 1"
 
     public static func encode(_ scores: [StillScore]) -> String {
         var out = magic + "\n"
@@ -358,21 +361,31 @@ public enum StillsFile {
         for s in scores.sorted(by: { $0.t < $1.t }) {
             let box = s.face.map { [$0.x, $0.y, $0.w, $0.h].map(n) } ?? ["-", "-", "-", "-"]
             out += ([String(format: "%.3f", s.t), String(format: "%.3f", s.quality), String(format: "%.3f", s.eyes),
-                     String(format: "%.3f", s.mouth)] + box).joined(separator: "\t") + "\n"
+                     s.lips.map(n) ?? "-"] + box).joined(separator: "\t") + "\n"
         }
         return out
     }
 
     public static func decode(_ text: String) -> [StillScore]? {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: true)[...]
-        guard lines.popFirst() == Substring(magic) else { return nil }
+        let head = lines.popFirst()
+        guard head == Substring(magic) || head == Substring(magic1) else { return nil }
+        let v1 = head == Substring(magic1)
         var out: [StillScore] = []
         for line in lines {
             let p = line.split(separator: "\t", omittingEmptySubsequences: false)
-            guard p.count == 8, let t = Double(p[0]), let q = Double(p[1]), let e = Double(p[2]), let m = Double(p[3]) else { return nil }
+            guard p.count == 8, let t = Double(p[0]), let q = Double(p[1]), let e = Double(p[2]) else { return nil }
+            let lips: Double?
+            if v1 {
+                // Version 1 held exp(-max(lips - 0.004, 0) / 0.006), to 3 decimals.
+                guard let m = Double(p[3]) else { return nil }
+                lips = m >= 0.9995 ? 0.004 : 0.004 - 0.006 * log(max(m, 0.0005))
+            } else {
+                lips = Double(p[3])
+            }
             var face: FaceBox?
             if let x = Double(p[4]), let y = Double(p[5]), let w = Double(p[6]), let h = Double(p[7]) { face = FaceBox(x: x, y: y, w: w, h: h) }
-            out.append(StillScore(t: t, quality: q, eyes: e, mouth: m, face: face))
+            out.append(StillScore(t: t, quality: q, eyes: e, lips: lips, face: face))
         }
         return out
     }
