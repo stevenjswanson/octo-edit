@@ -11,14 +11,20 @@ public struct FaceBox: Equatable, Sendable {
     /// the landmarks weren't found.
     public var mouthOpen: Double?
     public var mouthWidth: Double?
+    /// Which way the head is turned, in radians (0 = facing the camera); nil when not
+    /// measured. Vision reports it in 45° steps, which is enough to tell a face looking
+    /// at the audience from one turned towards whoever is talking.
+    public var yaw: Double?
 
-    public init(x: Double, y: Double, w: Double, h: Double, mouthOpen: Double? = nil, mouthWidth: Double? = nil) {
+    public init(x: Double, y: Double, w: Double, h: Double, mouthOpen: Double? = nil, mouthWidth: Double? = nil,
+                yaw: Double? = nil) {
         self.x = x
         self.y = y
         self.w = w
         self.h = h
         self.mouthOpen = mouthOpen
         self.mouthWidth = mouthWidth
+        self.yaw = yaw
     }
 
     public var centerX: Double { x + w / 2 }

@@ -114,6 +114,55 @@ func panel() -> (FaceTracks, Project) {
         #expect(back?.frames.count == faces.frames.count)
         #expect(back?.width == 3840)
         #expect(abs((back?.frames[3].faces[1].x ?? 0) - faces.frames[3].faces[1].x) < 1e-4)
+        #expect(back?.frames[3].faces[1].yaw == nil)
+        var turned = faces
+        turned.frames[3].faces[1].yaw = -0.785
+        #expect(FacesFile.decode(FacesFile.encode(turned))?.frames[3].faces[1].yaw == -0.785)
+    }
+
+    @Test func versionOneFacesFilesStillLoad() {
+        let v1 = "# octoedit faces 1\t3840\t2160\nF\t0.000\t255.00\nX\t0.4012\t0.2210\t0.0310\t0.0550\t0.0042\t0.0190\n"
+        let back = FacesFile.decode(v1)
+        #expect(back?.frames.first?.faces.first?.mouthWidth == 0.019)
+        #expect(back?.frames.first?.faces.first?.yaw == nil)
+    }
+
+    /// Three panelists (L, M, R) on a wide shot, each talking 20 s in turn, every one
+    /// with a microphone over the mouth, so no mouth is readable. The two listening
+    /// turn their heads towards whoever talks; the talker faces the audience.
+    @Test func whenMouthsAreHiddenTheFaceTheOthersTurnToIsTheSpeaker() {
+        let xs = [0.2, 0.5, 0.8], names = ["L", "M", "R"]
+        var frames: [FaceFrame] = []
+        for k in 0..<600 {
+            let t = Double(k) / 10, talker = Int(t / 20)
+            // Every mouth jitters the same, talking or not.
+            let faces = xs.enumerated().map { j, x in
+                FaceBox(x: x, y: 0.3, w: 0.06, h: 0.1, mouthOpen: (k + j) % 3 == 0 ? 0.12 : 0.1, mouthWidth: 0.5,
+                        yaw: j == talker ? 0 : (j < talker ? 0.785 : -0.785))
+            }
+            frames.append(FaceFrame(t: t, change: k == 0 ? 60 : 1, faces: faces))
+        }
+        let p = project([(0, 20, "L"), (20, 40, "M"), (40, 60, "R")])
+        let labels = FaceLabels(faces: FaceTracks(width: 3840, height: 2160, frames: frames), project: p)
+        for (x, name) in zip(xs, names) {
+            #expect(abs((labels.position(of: name, inShotAt: 5) ?? 0) - x - 0.03) < 0.01, "\(name)")
+        }
+    }
+
+    /// A speaker on screen talking for 20 s, and below them their hand round a
+    /// microphone, which Vision sometimes takes for a face for a frame or three, with
+    /// a "mouth" that moves a lot. The hand never gets the speaker's name.
+    @Test func aFlickeringFalseFaceGetsNoName() {
+        var frames: [FaceFrame] = []
+        for k in 0..<200 {
+            let t = Double(k) / 10
+            var faces = [FaceBox(x: 0.45, y: 0.25, w: 0.06, h: 0.1, mouthOpen: k % 2 == 0 ? 0.3 : 0.05, mouthWidth: 0.5)]
+            if k % 8 < 3 { faces.append(FaceBox(x: 0.46, y: 0.45, w: 0.04, h: 0.05, mouthOpen: k % 2 == 0 ? 0.6 : 0.0, mouthWidth: 0.5)) }
+            frames.append(FaceFrame(t: t, change: k == 0 ? 60 : 1, faces: faces))
+        }
+        let labels = FaceLabels(faces: FaceTracks(width: 3840, height: 2160, frames: frames), project: project([(0, 20, "S")]))
+        #expect(labels.position(of: "S", inShotAt: 5).map { abs($0 - 0.48) < 0.01 } == true)
+        #expect(labels.tracks.filter { $0.speaker == "S" }.allSatisfy { $0.samples[0].box.y < 0.3 })
     }
 }
 

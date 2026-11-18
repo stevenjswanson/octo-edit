@@ -296,24 +296,27 @@ public enum WaveformFile {
 
 /// `cache/faces.tsv`: face boxes through the video. Plain text so it can be looked at:
 ///
-///     # octoedit faces 1	3840	2160
+///     # octoedit faces 2	3840	2160
 ///     F	12.300	3.21
-///     X	0.4012	0.2210	0.0310	0.0550	0.0042	0.0190
+///     X	0.4012	0.2210	0.0310	0.0550	0.0042	0.0190	-0.785
 ///
 /// An `F` line starts a sampled frame (time, change from the previous sample); each
 /// `X` line after it is a face: x y w h (fractions, origin top-left), then mouth
-/// opening and width (fractions of the face box; `-` when unknown).
+/// opening and width (fractions of the face box), then head turn in radians
+/// (`-` when unknown). Version 1 files, without the head turn, still load.
 public enum FacesFile {
-    static let magic = "# octoedit faces 1"
+    static let magic = "# octoedit faces 2"
+    static let magicV1 = "# octoedit faces 1"
 
     public static func encode(_ f: FaceTracks) -> String {
         var out = "\(magic)\t\(f.width)\t\(f.height)\n"
         out.reserveCapacity(f.frames.count * 40)
         func n(_ v: Double?) -> String { v.map { String(format: "%.4f", $0) } ?? "-" }
+        func yaw(_ v: Double?) -> String { v.map { String(format: "%.3f", $0) } ?? "-" }
         for fr in f.frames {
             out += String(format: "F\t%.3f\t%.2f\n", fr.t, fr.change)
             for b in fr.faces {
-                out += "X\t\(n(b.x))\t\(n(b.y))\t\(n(b.w))\t\(n(b.h))\t\(n(b.mouthOpen))\t\(n(b.mouthWidth))\n"
+                out += "X\t\(n(b.x))\t\(n(b.y))\t\(n(b.w))\t\(n(b.h))\t\(n(b.mouthOpen))\t\(n(b.mouthWidth))\t\(yaw(b.yaw))\n"
             }
         }
         return out
@@ -323,16 +326,18 @@ public enum FacesFile {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: true)[...]
         guard let head = lines.popFirst() else { return nil }
         let h = head.split(separator: "\t")
-        guard h.count == 3, h[0] == magic, let w = Int(h[1]), let ht = Int(h[2]) else { return nil }
+        guard h.count == 3, h[0] == magic || h[0] == magicV1, let w = Int(h[1]), let ht = Int(h[2]) else { return nil }
+        let columns = h[0] == magic ? 8 : 7
         var frames: [FaceFrame] = []
         for line in lines {
             let p = line.split(separator: "\t", omittingEmptySubsequences: false)
             if p.first == "F", p.count == 3, let t = Double(p[1]), let c = Double(p[2]) {
                 frames.append(FaceFrame(t: t, change: c, faces: []))
-            } else if p.first == "X", p.count == 7, !frames.isEmpty,
+            } else if p.first == "X", p.count == columns, !frames.isEmpty,
                       let x = Double(p[1]), let y = Double(p[2]), let bw = Double(p[3]), let bh = Double(p[4]) {
                 frames[frames.count - 1].faces.append(FaceBox(x: x, y: y, w: bw, h: bh,
-                                                              mouthOpen: Double(p[5]), mouthWidth: Double(p[6])))
+                                                              mouthOpen: Double(p[5]), mouthWidth: Double(p[6]),
+                                                              yaw: columns > 7 ? Double(p[7]) : nil))
             } else {
                 return nil
             }

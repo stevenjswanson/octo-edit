@@ -4,8 +4,8 @@ import Vision
 import Core
 
 /// Faces through a video with Apple's Vision face landmarks, sampled `fps` times a
-/// second. About 0.3× the video's length for 4K at 10 fps. Keeps boxes and mouth
-/// shape only, never face fingerprints.
+/// second. About 0.3× the video's length for 4K at 10 fps. Keeps boxes, mouth shape
+/// and head turn only, never face fingerprints.
 public struct VisionFaceScanner: FaceScanner {
     public var fps: Double
     /// Faces Vision is less sure of than this are dropped.
@@ -68,7 +68,8 @@ public struct VisionFaceScanner: FaceScanner {
                 open = Self.extent(inner).h
                 width = Self.extent(outer).w
             }
-            return FaceBox(x: b.minX, y: 1 - b.maxY, w: b.width, h: b.height, mouthOpen: open, mouthWidth: width)
+            return FaceBox(x: b.minX, y: 1 - b.maxY, w: b.width, h: b.height, mouthOpen: open, mouthWidth: width,
+                           yaw: f.yaw.map(\.doubleValue))
         }
     }
 

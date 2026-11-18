@@ -3,7 +3,8 @@ import Core
 
 /// Which face belongs to which speaker, worked out from the transcript: within each
 /// shot, faces are linked into tracks, and a track is labelled with the paragraph
-/// speaker whose words its mouth moves with (lip-motion voting). Because the labels
+/// speaker whose words it goes with: the one face turned to the audience while the
+/// others turn to look at it, or else the face whose mouth moves (voting). Because the labels
 /// come from paragraph headers, correcting a header corrects the framing.
 public struct FaceLabels: Sendable {
     public struct Sample: Equatable, Sendable {
@@ -135,13 +136,33 @@ public struct FaceLabels: Sendable {
     /// talking measures 0.04–0.10 (Roy Guo's talk: median 0.059, 10th percentile 0.027).
     static let talking = 0.025
 
+    /// Head turn (radians) under which a face counts as facing the camera. Vision
+    /// reports 0 or ±45°, so anything below 45° is frontal.
+    static let frontal = 0.4
+
+    /// Tracks shorter than this (seconds) neither vote nor get a name: they are
+    /// flickers, often not faces at all (a hand round a microphone).
+    static let shortestTrack = 1.0
+
+    /// When several faces are on screen and exactly one faces the camera while the
+    /// rest are turned, that one is the speaker: on a panel, listeners turn to whoever
+    /// is talking. Doesn't need to see a mouth, so it works when a microphone hides it
+    /// (2026-11-09 panel: right on 384 of 401 such frames).
+    static func facing(_ faces: [(track: Int, act: Double, yaw: Double?)]) -> Int? {
+        guard faces.count >= 2, faces.allSatisfy({ $0.yaw != nil }) else { return nil }
+        let front = faces.filter { abs($0.yaw!) < frontal }
+        return front.count == 1 ? front[0].track : nil
+    }
+
     /// The name with the most votes (ties to the first name alphabetically).
     static func top(_ votes: [String: Int]) -> (String, Int)? {
         votes.max(by: { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }).map { ($0.key, $0.value) }
     }
 
-    /// Per sampled frame with someone speaking, the face whose mouth moves most (by a
-    /// 1.3× margin over the next, and at least `talking`) votes for that speaker. Votes
+    /// Per sampled frame with someone speaking, the one face turned to the audience
+    /// while the others look away (`facing`) votes for that speaker; failing that, the
+    /// face whose mouth moves most (by a 1.3× margin over the next, and at least
+    /// `talking`) does. Tracks shorter than `shortestTrack` take no part. Votes
     /// are pooled by seat: the camera keeps coming back to the same framing and people
     /// stay in their chairs, so tracks at the same place and size in any shot are one
     /// person — unless a track's own votes clearly name someone else. A seat takes the
@@ -153,8 +174,9 @@ public struct FaceLabels: Sendable {
         let dt = frames.count > 1 ? max((frames.last!.t - frames.first!.t) / Double(frames.count - 1), 0.01) : 0.1
         // Mouth activity per sample: mean change of the mouth's aspect ratio over ±0.5 s.
         let window = max(Int((0.5 / dt).rounded()), 1)
-        var activity: [Seconds: [(track: Int, act: Double)]] = [:]
-        for (id, tr) in tracks.enumerated() {
+        let shortest = Int((Self.shortestTrack / dt).rounded())
+        var activity: [Seconds: [(track: Int, act: Double, yaw: Double?)]] = [:]
+        for (id, tr) in tracks.enumerated() where tr.samples.count >= shortest {
             let ratio = tr.samples.map { s -> Double? in
                 guard let o = s.box.mouthOpen, let w = s.box.mouthWidth, w > 1e-3 else { return nil }
                 return o / w
@@ -162,13 +184,17 @@ public struct FaceLabels: Sendable {
             for (k, s) in tr.samples.enumerated() {
                 let win = ratio[max(0, k - window)...min(ratio.count - 1, k + window)].compactMap { $0 }
                 let diffs = zip(win, win.dropFirst()).map { abs($1 - $0) }
-                activity[s.t, default: []].append((id, diffs.isEmpty ? 0 : diffs.reduce(0, +) / Double(diffs.count)))
+                activity[s.t, default: []].append((id, diffs.isEmpty ? 0 : diffs.reduce(0, +) / Double(diffs.count), s.box.yaw))
             }
         }
         var won: [Int: [String: Int]] = [:], heard: [Int: [String: Int]] = [:]
         for f in frames {
             guard let speaker = voices.speaker(at: f.t), let faces = activity[f.t], !faces.isEmpty else { continue }
             for a in faces { heard[a.track, default: [:]][speaker, default: 0] += 1 }
+            if let id = Self.facing(faces) {
+                won[id, default: [:]][speaker, default: 0] += 1
+                continue
+            }
             let ranked = faces.sorted { $0.act > $1.act }
             // Only a moving mouth votes: a listener alone on screen while someone
             // off-camera talks must not win their words.
@@ -185,7 +211,7 @@ public struct FaceLabels: Sendable {
         let minimum = Int((1.0 / dt).rounded())
         // Frames each track's seat won for its speaker: how much evidence there is.
         var votes = [Int](repeating: 0, count: tracks.count)
-        for id in tracks.indices {
+        for id in tracks.indices where tracks[id].samples.count >= shortest {
             let seat = seatOf[id]
             guard var (name, count) = seatWon[seat].flatMap(Self.top) else { continue }
             var score = Double(count) / Double(max(seatHeard[seat]?[name] ?? 1, 1))
