@@ -123,7 +123,9 @@ final class DocumentModel {
     private(set) var currentExports: Set<ClipID> = []
 
     @ObservationIgnored let player = AVPlayer()
-    @ObservationIgnored let preview = PreviewModel()
+    /// This window's view settings (9:16 preview, faces, auto preview).
+    @ObservationIgnored let settings: PlaybackSettings
+    @ObservationIgnored let preview: PreviewModel
     @ObservationIgnored lazy var sourceSpeed = SpeedWatcher(player)
     @ObservationIgnored lazy var previewSpeed = SpeedWatcher(preview.player)
     @ObservationIgnored let thumbnails = Thumbnails()
@@ -141,6 +143,9 @@ final class DocumentModel {
     @ObservationIgnored private var clickGeneration = 0
 
     init() {
+        let settings = PlaybackSettings()
+        self.settings = settings
+        preview = PreviewModel(settings: settings)
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 20), queue: .main) { [weak self] t in
             MainActor.assumeIsolated { self?.sourceTimeChanged(t.seconds) }
         }
@@ -582,6 +587,16 @@ final class DocumentModel {
     func queuePreviewCue(_ cue: PreviewModel.Cue) { nextCue = cue }
     func queuePreviewCueClear() { nextCue = nil }
     func refreshPreviewNow() { refreshPreview() }
+
+    /// 9:16 preview on or off for this window; rebuilds this window's preview.
+    var portraitPreview: Bool {
+        get { settings.portraitPreview }
+        set {
+            guard newValue != settings.portraitPreview else { return }
+            settings.portraitPreview = newValue
+            refreshPreview()
+        }
+    }
 
     /// Source-time extent of the timed words in `r`.
     private func span(of r: ClosedRange<Int>) -> (start: Double, end: Double)? {

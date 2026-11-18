@@ -3,10 +3,10 @@ import SwiftUI
 /// Above the transcript: Cut / Edit Text mode, Follow playhead, Show faces, and search.
 struct TranscriptToolbar: View {
     @Bindable var model: DocumentModel
-    @Bindable private var settings = PlaybackSettings.shared
     @FocusState private var searchFocused: Bool
 
     var body: some View {
+        @Bindable var settings = model.settings
         HStack(spacing: 10) {
             Picker("Mode", selection: Binding(get: { model.textEditing }, set: { on in
                 if on != model.textEditing { model.toggleTextEditing() }

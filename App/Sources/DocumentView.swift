@@ -61,9 +61,11 @@ struct VideoPane: View {
     let model: DocumentModel
     let preview: PreviewModel
     let locate: () -> Void
-    @Bindable private var settings = PlaybackSettings.shared
+    private var settings: PlaybackSettings { model.settings }
 
     var body: some View {
+        @Bindable var settings = model.settings
+        @Bindable var model = model
         HSplitView {
             video
                 .frame(minWidth: 420)
@@ -79,10 +81,9 @@ struct VideoPane: View {
                     Toggle("Auto preview", isOn: $settings.autoPreview)
                         .toggleStyle(.checkbox).controlSize(.small)
                         .help("After an edit, play the spot that changed (⇧⌘P)")
-                    Toggle("9:16 preview", isOn: $settings.portraitPreview)
+                    Toggle("9:16 preview", isOn: $model.portraitPreview)
                         .toggleStyle(.checkbox).controlSize(.small)
                         .help("Play clips cropped to a 9:16 column that follows the speaker, as a 9:16 export looks")
-                        .onChange(of: settings.portraitPreview) { model.refreshPreviewNow() }
                     Spacer()
                 }
                 .padding(.horizontal, 10).padding(.bottom, 4)
@@ -110,7 +111,7 @@ struct VideoPane: View {
                     .padding()
                     .foregroundStyle(.white)
                 } else {
-                    PlayerView(player: model.player, onFocus: { model.focus(.source) })
+                    PlayerView(player: model.player, isShown: showingSource, onFocus: { model.focus(.source) })
                         .overlay(alignment: .topTrailing) { SpeedBadge(watcher: model.sourceSpeed) }
                         .opacity(showingSource ? 1 : 0)
                         .allowsHitTesting(showingSource)
@@ -118,7 +119,7 @@ struct VideoPane: View {
                         if let message = preview.message {
                             Text(message).foregroundStyle(.secondary)
                         } else {
-                            PlayerView(player: preview.player, onFocus: { model.focus(.preview) })
+                            PlayerView(player: preview.player, isShown: !showingSource, onFocus: { model.focus(.preview) })
                                 .overlay(alignment: .topTrailing) { SpeedBadge(watcher: model.previewSpeed) }
                         }
                     }

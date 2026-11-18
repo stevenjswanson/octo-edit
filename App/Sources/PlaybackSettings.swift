@@ -1,10 +1,11 @@
 import Foundation
 import Observation
 
-/// App-wide playback preferences, remembered between launches.
+/// One project window's playback and view preferences. Each window has its own (owned
+/// by its DocumentModel), so a checkbox in one window never changes another. The last
+/// value set anywhere is remembered as the starting value for windows opened later.
 @MainActor @Observable
 final class PlaybackSettings {
-    static let shared = PlaybackSettings()
 
     /// After an edit to the previewed clip (while it isn't playing), play the spot that changed.
     var autoPreview: Bool {
@@ -26,7 +27,7 @@ final class PlaybackSettings {
         didSet { UserDefaults.standard.set(showFaces, forKey: "showFaces") }
     }
 
-    private init() {
+    init() {
         let d = UserDefaults.standard
         showFaces = d.object(forKey: "showFaces") as? Bool ?? false
         portraitPreview = d.object(forKey: "portraitPreview") as? Bool ?? false

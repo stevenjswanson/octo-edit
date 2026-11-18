@@ -21,6 +21,8 @@ final class PreviewModel {
     private(set) var isPlayingObserved = false
 
     @ObservationIgnored let player = AVPlayer()
+    /// This window's settings (9:16 preview, auto preview).
+    @ObservationIgnored let settings: PlaybackSettings
     @ObservationIgnored private var asset: AVURLAsset?
     @ObservationIgnored private var sourceDuration: Double?
     @ObservationIgnored private var built: CompositionBuilder.Output?
@@ -64,7 +66,8 @@ final class PreviewModel {
     /// The preview started playing.
     @ObservationIgnored var onPlay: () -> Void = {}
 
-    init() {
+    init(settings: PlaybackSettings) {
+        self.settings = settings
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 20), queue: .main) { [weak self] t in
             MainActor.assumeIsolated {
                 guard let self, self.built != nil, let source = self.sourceTime(forClip: t.seconds) else { return }
@@ -128,7 +131,7 @@ final class PreviewModel {
         let segs = project.resolvedSegments(of: clip, sourceDuration: sourceDuration)
         guard !segs.isEmpty else { clear(message: "This clip has no timed words."); clipID = clip.id; return }
         // With 9:16 preview on, it plays the cropped column, exactly as a 9:16 export.
-        let column = PlaybackSettings.shared.portraitPreview
+        let column = settings.portraitPreview
             ? ColumnPath(segments: segs.map { ($0.start, $0.end) }, timeline: SpeechTimeline(project),
                          labels: faceLabels(), aspect: aspect)
             : nil
@@ -190,7 +193,7 @@ final class PreviewModel {
                 readyCue = nil
                 if let cue, cue.playsWithoutAutoPreview {
                     await playExcerpt(cue)
-                } else if let cue, PlaybackSettings.shared.autoPreview {
+                } else if let cue, settings.autoPreview {
                     await playExcerpt(cue)
                 } else {
                     await quietSeek(min(target, max(duration - 0.02, 0)))
@@ -262,7 +265,7 @@ final class PreviewModel {
         playbackLog.debug("preview excerpt \(String(describing: cue)) generation \(generation)")
         // Seek paused, then play: seeking while playing races to catch up.
         player.pause()
-        let length = PlaybackSettings.shared.autoPreviewLength
+        let length = settings.autoPreviewLength
         let (from, to): (Double, Double)
         var loops = false
         switch cue {
