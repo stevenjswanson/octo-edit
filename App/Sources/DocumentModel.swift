@@ -446,17 +446,33 @@ final class DocumentModel {
         if perform("Split Clip", { try $0.splitClip(id, atWord: w) }) { select(clip: id) }
     }
 
-    /// ⌫ with a clip selected (and no words selected): delete it after confirming.
+    /// The clips Delete removes: the whole shelf selection when several clips are
+    /// selected there, else the selected clip. In document order.
+    var clipsToDelete: [ClipID] {
+        let ids = shelfSelection.count > 1 ? shelfSelection : Set([selectedClip].compactMap { $0 })
+        return project.clips.map(\.id).filter(ids.contains)
+    }
+
+    /// "Delete Clip", or "Delete N Clips" for a multi-clip selection.
+    var deleteClipsTitle: String { Self.deleteTitle(count: clipsToDelete.count) }
+
+    static func deleteTitle(count: Int) -> String { count > 1 ? "Delete \(count) Clips" : "Delete Clip" }
+
+    /// ⌫ with a clip selected (and no words selected): delete it (or every clip selected
+    /// in the shelf) after confirming.
     func confirmDeleteSelectedClip(in window: NSWindow) {
-        guard canEdit, let id = selectedClip, let clip = project.clip(id) else { return }
+        let ids = clipsToDelete
+        guard canEdit, let first = ids.first, let clip = project.clip(first) else { return }
         let alert = NSAlert()
-        alert.messageText = "Delete clip “\(clip.name ?? project.slug(of: id) ?? "clip")”?"
-        alert.informativeText = "The transcript text stays; only the clip and its cuts are removed. You can undo this with ⌘Z."
+        alert.messageText = ids.count > 1
+            ? "Delete \(ids.count) clips?"
+            : "Delete clip “\(clip.name ?? project.slug(of: first) ?? "clip")”?"
+        alert.informativeText = "The transcript text stays; only the \(ids.count > 1 ? "clips and their" : "clip and its") cuts are removed. You can undo this with ⌘Z."
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         alert.buttons[0].hasDestructiveAction = true
         alert.beginSheetModal(for: window) { [weak self] response in
-            if response == .alertFirstButtonReturn { self?.deleteClip(id) }
+            if response == .alertFirstButtonReturn { self?.deleteClips(ids) }
         }
     }
 
@@ -474,8 +490,9 @@ final class DocumentModel {
         renameRequest += 1
     }
 
-    func deleteClip(_ id: ClipID) {
-        perform("Delete Clip") { try $0.deleteClip(id) }
+    func deleteClips(_ ids: [ClipID]) {
+        guard !ids.isEmpty else { return }
+        perform(Self.deleteTitle(count: ids.count)) { try $0.deleteClips(ids) }
     }
 
     func exportClip(_ id: ClipID) {
@@ -551,10 +568,7 @@ final class DocumentModel {
         if !perform("Extend Clip", { try $0.extendClip(id, toInclude: s) }) { refreshPreview() }
     }
 
-    func deleteClip() {
-        guard let id = selectedClip else { return }
-        perform("Delete Clip") { try $0.deleteClip(id) }
-    }
+    func deleteClip() { deleteClips(clipsToDelete) }
 
     /// Moves the selected clip's start (or end) to the word under the source playhead.
     func setBoundaryAtPlayhead(inPoint: Bool) {
@@ -686,6 +700,17 @@ final class DocumentModel {
     }
 
     func focus(_ pane: Pane) { activePane = pane }
+
+    /// Steps the video on screen one frame (`count` −1 back, +1 forward) if it is
+    /// paused. Returns whether it stepped.
+    @discardableResult
+    func stepFrame(by count: Int) -> Bool {
+        let p = activePane == .preview ? preview.player : player
+        guard p.rate == 0, let item = p.currentItem, item.canStepForward || count < 0,
+              item.canStepBackward || count > 0 else { return false }
+        item.step(byCount: count)
+        return true
+    }
 
     /// Space bar: play or pause the focused video pane.
     func togglePlay() {

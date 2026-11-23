@@ -121,6 +121,11 @@ struct VideoPane: View {
                         } else {
                             PlayerView(player: preview.player, isShown: !showingSource, onFocus: { model.focus(.preview) })
                                 .overlay(alignment: .topTrailing) { SpeedBadge(watcher: model.previewSpeed) }
+                                .overlay(alignment: .topLeading) {
+                                    if !preview.building, let t = preview.position {
+                                        FrameBadge(t: t, fps: model.sourceFPS)
+                                    }
+                                }
                         }
                     }
                     .opacity(showingSource ? 0 : 1)
@@ -207,5 +212,24 @@ struct SpeakerFadeSlider: View {
         }
         .disabled(!model.canEdit)
         .help("9:16: how long a move to a new speaker takes, fading to black and back in. Saved with the project; exports use it.")
+    }
+}
+
+/// The preview's frame in the source recording: its number and a time inside it in
+/// the `still=` form (selectable, to copy into a clip marker).
+struct FrameBadge: View {
+    let t: Double
+    let fps: Double
+
+    var body: some View {
+        let n = FrameClock.frame(at: t, fps: fps)
+        Text("frame \(n) · \(FrameClock.timestamp(FrameClock.time(ofFrame: n, fps: fps)))")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(Color.white.opacity(0.85))
+            .textSelection(.enabled)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.black.opacity(0.45), in: Capsule())
+            .padding(8)
+            .help("This frame of the recording. The time names it exactly: use it as still= on a clip marker.")
     }
 }

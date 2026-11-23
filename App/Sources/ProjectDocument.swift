@@ -257,8 +257,9 @@ final class ProjectDocument: NSDocument {
     /// Edit Text mode, or a word selection in the transcript (⌫ omits those words).
     private func installDeleteKey(for window: NSWindow) {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self, weak window] event in
-            guard let self, let window, event.window === window,
-                  event.keyCode == 51 || event.keyCode == 117,
+            guard let self, let window, event.window === window else { return event }
+            if event.keyCode == 123 || event.keyCode == 124 { return self.stepFrame(event, in: window) ? nil : event }
+            guard event.keyCode == 51 || event.keyCode == 117,
                   event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
             let responder = window.firstResponder
             if let text = responder as? WordTextView {
@@ -267,12 +268,20 @@ final class ProjectDocument: NSDocument {
                 return event
             }
             let handled: Bool = MainActor.assumeIsolated {
-                guard !self.model.textEditing, self.model.canEdit, self.model.selectedClip != nil else { return false }
+                guard !self.model.textEditing, self.model.canEdit, !self.model.clipsToDelete.isEmpty else { return false }
                 self.model.confirmDeleteSelectedClip(in: window)
                 return true
             }
             return handled ? nil : event
         }
+    }
+
+    /// ← / → with the video paused step it one frame back or forward, unless a text
+    /// view has the focus (there the arrows move the caret).
+    private func stepFrame(_ event: NSEvent, in window: NSWindow) -> Bool {
+        guard event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+              !(window.firstResponder is NSTextView) else { return false }
+        return MainActor.assumeIsolated { model.stepFrame(by: event.keyCode == 123 ? -1 : 1) }
     }
 
     // MARK: Clip commands
@@ -360,6 +369,9 @@ final class ProjectDocument: NSDocument {
                 return m.canEdit
             }
         }
+        if item.action == #selector(deleteClip(_:)), let menuItem = item as? NSMenuItem {
+            menuItem.title = MainActor.assumeIsolated { m.deleteClipsTitle }
+        }
         let enabled: Bool? = MainActor.assumeIsolated {
             switch item.action {
             case #selector(makeClip(_:)): m.canEdit && m.canMakeClip
@@ -368,7 +380,7 @@ final class ProjectDocument: NSDocument {
             case #selector(restoreSelection(_:)): transcriptFocused && m.canEdit && m.canRestore
             case #selector(setClipStart(_:)), #selector(setClipEnd(_:)):
                 transcriptFocused && m.canEdit && m.selectedClip != nil && m.currentWord != nil
-            case #selector(deleteClip(_:)): m.canEdit && m.selectedClip != nil
+            case #selector(deleteClip(_:)): m.canEdit && !m.clipsToDelete.isEmpty
             case #selector(mergeClips(_:)): m.canEdit && m.canMerge
             case #selector(splitClip(_:)): m.canEdit && m.canSplit
             case #selector(inspectCut(_:)): m.canEdit && !m.project.clips.isEmpty

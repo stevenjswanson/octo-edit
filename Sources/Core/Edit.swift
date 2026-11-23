@@ -183,11 +183,16 @@ extension Project {
 
     /// Deletes a clip. Its words stay in the transcript, and its omissions stay omitted.
     public mutating func deleteClip(_ id: ClipID) throws {
-        let ci = try clipIndex(id)
+        try deleteClips([id])
+    }
+
+    /// Deletes several clips in one edit. Their words stay in the transcript, and their
+    /// omissions stay omitted. Throws (deleting nothing) if any id is unknown.
+    public mutating func deleteClips<S: Sequence>(_ ids: S) throws where S.Element == ClipID {
+        let doomed = Set(ids)
+        for id in doomed { _ = try clipIndex(id) }
         let map = omissionMap()
-        var all = try spans()
-        all.remove(at: ci)
-        try layOut(all, map)
+        try layOut(try spans().filter { !doomed.contains($0.clip.id) }, map)
     }
 
     /// Omits words wherever they are. Inside a clip they are cut out of it (omitting a

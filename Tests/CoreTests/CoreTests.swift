@@ -434,6 +434,23 @@ func sampleProject(count: Int = 10) -> Project {
         #expect(p.omissions.isEmpty)
     }
 
+    @Test func deletingSeveralClipsAtOnce() throws {
+        var p = sampleProject()
+        let a = try p.makeClip(words: 0...2)
+        let b = try p.makeClip(words: 3...5)
+        let c = try p.makeClip(words: 6...9)
+        try p.omit(words: 4...4)
+        try p.deleteClips([c, a])
+        #expect(p.clips.map(\.id) == [b])
+        #expect(p.indexRange(of: p.clip(b)!) == 3...5)
+        // An unknown id deletes nothing.
+        #expect(throws: EditError.self) { try p.deleteClips([b, ClipID(99)]) }
+        #expect(p.clips.map(\.id) == [b])
+        try p.deleteClips([b])
+        #expect(p.clips.isEmpty)
+        #expect(ranges(p) == [4...4])
+    }
+
     @Test func deletingAClipKeepsItsOmissionsAndOffsets() throws {
         var p = sampleProject()
         let c = try p.makeClip(words: 1...8)
@@ -664,5 +681,30 @@ func sampleProject(count: Int = 10) -> Project {
         let pe = PostExport(run: "~/tools/brand-clip")
         #expect(pe.name == "brand-clip" && pe.writesOutput)
         #expect(!PostExport(run: "x", args: ["{video}"]).writesOutput)
+    }
+}
+
+@Suite struct FrameClockTests {
+    @Test func framesAndTheirTimesRoundTrip() {
+        for fps in [24.0, 25, 30, 30000.0 / 1001, 59.94, 60] {
+            for n in [0, 1, 2, 999, 104_523, 400_000] {
+                let t = FrameClock.time(ofFrame: n, fps: fps)
+                #expect(FrameClock.frame(at: t, fps: fps) == n, "fps \(fps) frame \(n)")
+                // Whole milliseconds, as still= keeps them.
+                #expect(abs(t * 1000 - (t * 1000).rounded()) < 1e-6)
+            }
+        }
+    }
+
+    @Test func aFrameStartsAtItsOwnStart() {
+        let fps = 30000.0 / 1001
+        #expect(FrameClock.frame(at: 3 * 1001.0 / 30000, fps: fps) == 3)
+        #expect(FrameClock.frame(at: 3 * 1001.0 / 30000 - 0.001, fps: fps) == 2)
+        #expect(FrameClock.frame(at: -1, fps: fps) == 0)
+    }
+
+    @Test func timestampForm() {
+        #expect(FrameClock.timestamp(3481.2334) == "00:58:01.233")
+        #expect(FrameClock.timestamp(0) == "00:00:00.000")
     }
 }

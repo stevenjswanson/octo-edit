@@ -33,7 +33,10 @@ struct ClipShelf: View {
                                 Button("Show in Finder") { model.showExportInFinder(clip.id) }
                                     .disabled(model.exportedVideo(of: clip.id) == nil)
                                 Divider()
-                                Button("Delete Clip") { model.deleteClip(clip.id) }
+                                // Right-clicking one of several selected clips deletes them all.
+                                let ids = model.shelfSelection.count > 1 && model.shelfSelection.contains(clip.id)
+                                    ? model.clipsToDelete : [clip.id]
+                                Button(DocumentModel.deleteTitle(count: ids.count)) { model.deleteClips(ids) }
                             }
 
                     }
